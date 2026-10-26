@@ -1,0 +1,7 @@
+{
+  "name":"Smart Mess","short_name":"Smart Mess",
+  "description":"Meal tracking and mess management",
+  "start_url":"/login","display":"standalone",
+  "background_color":"#f7f8fa","theme_color":"#12634f",
+  "icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any"}]
+}
