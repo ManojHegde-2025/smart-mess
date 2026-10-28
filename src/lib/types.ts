@@ -37,13 +37,18 @@ export type LedgerEntry = {
   note: string;
   createdAt: string;
 };
+export type LeaveStatus = "pending" | "approved" | "rejected" | "cancelled";
 export type Leave = {
   id: string;
   userId: string;
+  studentName?: string;
+  collegeId?: string;
   startsOn: string;
   endsOn: string;
-  status: "approved" | "rejected";
+  status: LeaveStatus;
   source: string;
+  reason?: string;
+  createdAt?: string;
 };
 export type Usage = {
   date: string;
@@ -88,6 +93,13 @@ export type Forecast = {
   modelVersion?: string;
   note?: string;
 };
+export type PaginatedStudents = {
+  students: (User & { balance: number })[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
 export type StudentOverview = {
   user: User;
   settings: Settings;
@@ -104,6 +116,7 @@ export type ManagerOverview = {
   counts: Record<Meal, number>;
   prepared: Record<Meal, number>;
   leaveCount: number;
+  pendingLeaves: Leave[];
   exceptions: MealEvent[];
   history: Usage[];
   forecasts: Forecast[];

@@ -83,3 +83,63 @@ export const wardenSchema = z
     leaveId: z.string().min(1).max(100),
   })
   .refine((v) => v.startsOn <= v.endsOn, "Invalid leave dates");
+export const createStudentSchema = z.object({
+  collegeId: z
+    .string()
+    .trim()
+    .min(2)
+    .max(40)
+    .regex(/^[a-zA-Z0-9_-]+$/),
+  name: z.string().trim().min(2).max(100),
+  pin: z.string().regex(/^\d{6,12}$/),
+  messId: z.string().min(2).max(40).optional(),
+});
+export const resetPinSchema = z.object({
+  userId: z.string().uuid(),
+  pin: z.string().regex(/^\d{6,12}$/),
+});
+export const updateStatusSchema = z.object({
+  userId: z.string().uuid(),
+  active: z.boolean(),
+});
+export const csvStudentSchema = z.object({
+  collegeId: z
+    .string()
+    .trim()
+    .min(2)
+    .max(40)
+    .regex(/^[a-zA-Z0-9_-]+$/),
+  name: z.string().trim().min(2).max(100),
+  messId: z.string().min(2).max(40).optional(),
+});
+export const bulkImportSchema = z.object({
+  students: z.array(csvStudentSchema).min(1).max(500),
+  defaultPin: z.string().regex(/^\d{6,12}$/).optional(),
+});
+export const studentLeaveRequestSchema = z
+  .object({
+    startsOn: dateSchema,
+    endsOn: dateSchema,
+    reason: z.string().trim().max(300).optional(),
+  })
+  .refine((v) => v.startsOn <= v.endsOn, "End date must follow start date");
+export const reviewLeaveSchema = z.object({
+  leaveId: z.string().uuid(),
+  status: z.enum(["approved", "rejected"]),
+});
+export const manualLeaveSchema = z
+  .object({
+    userId: z.string().uuid(),
+    startsOn: dateSchema,
+    endsOn: dateSchema,
+    reason: z.string().trim().min(2).max(300),
+  })
+  .refine((v) => v.startsOn <= v.endsOn, "End date must follow start date");
+export const cancelLeaveSchema = z.object({
+  leaveId: z.string().uuid(),
+});
+export const paginationSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  search: z.string().trim().max(100).optional().default(""),
+});

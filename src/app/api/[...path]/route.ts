@@ -12,11 +12,20 @@ import { ApiError } from "@/lib/errors";
 import * as service from "@/lib/service";
 import {
   addonSchema,
+  bulkImportSchema,
+  cancelLeaveSchema,
+  createStudentSchema,
   ledgerSchema,
   loginSchema,
+  manualLeaveSchema,
   mealSchema,
+  paginationSchema,
+  resetPinSchema,
+  reviewLeaveSchema,
   scanSchema,
   settingsSchema,
+  studentLeaveRequestSchema,
+  updateStatusSchema,
   usageSchema,
 } from "@/lib/validation";
 import { localTime, reportCsv } from "@/lib/domain";
@@ -122,9 +131,93 @@ async function handler(request: NextRequest) {
         await service.orderAddon(user, addonSchema.parse(await body())),
       );
     }
+    if (path === "/student/leaves" && method === "POST") {
+      requireRole(user, "student");
+      return json(
+        await service.requestLeave(
+          user,
+          studentLeaveRequestSchema.parse(await body()),
+        ),
+        201,
+      );
+    }
+    if (path === "/student/leaves/cancel" && method === "POST") {
+      requireRole(user, "student");
+      return json(
+        await service.cancelLeave(
+          user,
+          cancelLeaveSchema.parse(await body()),
+        ),
+      );
+    }
     requireRole(user, "manager");
     if (path === "/manager/overview" && method === "GET")
       return json(await service.managerOverview(user));
+    if (path === "/manager/students" && method === "GET") {
+      const params = paginationSchema.parse({
+        page: request.nextUrl.searchParams.get("page") ?? 1,
+        limit: request.nextUrl.searchParams.get("limit") ?? 25,
+        search: request.nextUrl.searchParams.get("search") ?? "",
+      });
+      return json(
+        await service.paginatedStudents(
+          user,
+          params.page,
+          params.limit,
+          params.search,
+        ),
+      );
+    }
+    if (path === "/manager/students" && method === "POST") {
+      return json(
+        await service.createStudent(
+          user,
+          createStudentSchema.parse(await body()),
+        ),
+        201,
+      );
+    }
+    if (path === "/manager/students/reset-pin" && method === "POST") {
+      return json(
+        await service.resetStudentPin(
+          user,
+          resetPinSchema.parse(await body()),
+        ),
+      );
+    }
+    if (path === "/manager/students/status" && method === "PATCH") {
+      return json(
+        await service.updateStudentStatus(
+          user,
+          updateStatusSchema.parse(await body()),
+        ),
+      );
+    }
+    if (path === "/manager/students/import" && method === "POST") {
+      return json(
+        await service.bulkImportStudents(
+          user,
+          bulkImportSchema.parse(await body()),
+        ),
+      );
+    }
+    if (path === "/manager/leaves/review" && method === "PATCH") {
+      return json(
+        await service.reviewLeave(
+          user,
+          reviewLeaveSchema.parse(await body()),
+        ),
+      );
+    }
+    if (path === "/manager/leaves/manual" && method === "POST") {
+      return json(
+        await service.manualLeave(
+          user,
+          manualLeaveSchema.parse(await body()),
+        ),
+        201,
+      );
+    }
     if (path === "/manager/qr" && method === "GET")
       return json(
         await service.issueQr(

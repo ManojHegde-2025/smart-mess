@@ -11,6 +11,7 @@ async function main() {
         name: { type: "string" },
         role: { type: "string" },
         "reset-pin": { type: "boolean", default: false },
+        "mess-id": { type: "string", default: "south-mess" },
       },
     });
     const id = values["college-id"]?.trim().toUpperCase();
@@ -49,7 +50,14 @@ async function main() {
         );
       await query(
         "INSERT INTO users(id,college_id,name,role,mess_id,pin_hash) VALUES($1,$2,$3,$4,$5,$6)",
-        [randomUUID(), id, values.name.trim(), values.role, "south-mess", hash],
+        [
+          randomUUID(),
+          id,
+          values.name.trim(),
+          values.role,
+          values["mess-id"] ?? "south-mess",
+          hash,
+        ],
       );
       console.log(`Created ${values.role} account ${id}.`);
     }

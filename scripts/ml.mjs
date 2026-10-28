@@ -87,15 +87,15 @@ try {
   if (action === "setup") {
     localAddress();
     const candidates = windows
-      ? [["py", "-3.12"], ["python"]]
-      : [["python3.12"], ["python3"], ["python"]];
+      ? [["py", "-3.12"], ["py", "-3.11"], ["python"]]
+      : [["python3.12"], ["python3.11"], ["python3"], ["python"]];
     const executable = candidates.find(([command, ...args]) => {
       const check = spawnSync(
         command,
         [
           ...args,
           "-c",
-          "import sys; sys.exit(0 if sys.version_info[:2] == (3, 12) else 1)",
+          "import sys; sys.exit(0 if (3, 11) <= sys.version_info[:2] <= (3, 12) else 1)",
         ],
         { stdio: "ignore" },
       );
@@ -103,7 +103,7 @@ try {
     });
     if (!executable)
       throw new Error(
-        "Install Python 3.12 from python.org, include the Windows Python launcher, then reopen your terminal and retry npm run ml:setup.",
+        "Install Python 3.12 or 3.11 from python.org, include the Windows Python launcher, then reopen your terminal and retry npm run ml:setup.",
       );
     if (!existsSync(python))
       run(executable[0], [

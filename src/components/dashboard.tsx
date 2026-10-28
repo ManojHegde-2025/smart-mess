@@ -14,11 +14,15 @@ import {
   ArrowDownToLine,
   ArrowRight,
   CalendarDays,
+  Check,
   CheckCircle2,
   ChefHat,
+  ChevronLeft,
+  ChevronRight,
   ClipboardCheck,
   Clock3,
   Coffee,
+  KeyRound,
   Leaf,
   Plus,
   QrCode,
@@ -29,8 +33,13 @@ import {
   Sun,
   Sunset,
   TrendingUp,
+  UploadCloud,
+  UserCheck,
+  UserPlus,
+  UserX,
   Users,
   Utensils,
+  X,
 } from "lucide-react";
 import { useApp } from "./provider";
 import { Empty, ErrorBox, Loading, Shell } from "./shell";
@@ -38,9 +47,12 @@ import { ForecastStatus } from "./forecast-status";
 import { formatMoney, reportCsv } from "@/lib/domain";
 import {
   MEALS,
+  type Leave,
   type ManagerOverview,
   type Meal,
+  type PaginatedStudents,
   type Settings,
+  type User,
 } from "@/lib/types";
 const mealIcons = { breakfast: Coffee, lunch: Sun, dinner: Sunset };
 type View = "overview" | "accounts" | "reports" | "settings";
@@ -53,6 +65,76 @@ function download(data: ManagerOverview) {
   a.download = `smart-mess-${data.today}.csv`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function downloadSampleCsv() {
+  const sample = "college_id,name,mess_id\nSM2026101,Aarav Patel,south-mess\nSM2026102,Diya Sharma,south-mess\nSM2026103,Kabir Rao,south-mess\n";
+  const url = URL.createObjectURL(new Blob([sample], { type: "text/csv;charset=utf-8;" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "students_sample.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadCredentialsCsv(credentials: { collegeId: string; name: string; pin: string }[]) {
+  const lines = [
+    "college_id,name,initial_pin",
+    ...credentials.map((c) => `"${c.collegeId}","${c.name.replace(/"/g, '""')}","${c.pin}"`),
+  ];
+  const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `student_credentials_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function parseStudentCsv(text: string) {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) {
+    return {
+      valid: [],
+      invalid: [{ row: 1, raw: "", reason: "CSV must contain a header and at least one student row." }],
+    };
+  }
+  const header = lines[0].toLowerCase().split(",").map((c) => c.trim().replace(/^["']|["']$/g, ""));
+  const colIndex = {
+    collegeId: header.findIndex((h) => h === "college_id" || h === "collegeid" || h === "id"),
+    name: header.findIndex((h) => h === "name" || h === "student_name" || h === "studentname"),
+    messId: header.findIndex((h) => h === "mess_id" || h === "messid" || h === "mess"),
+  };
+  if (colIndex.collegeId === -1 || colIndex.name === -1) {
+    return {
+      valid: [],
+      invalid: [{ row: 1, raw: lines[0], reason: "CSV header must contain 'college_id' and 'name' columns." }],
+    };
+  }
+  const valid: { collegeId: string; name: string; messId?: string }[] = [];
+  const invalid: { row: number; raw: string; reason: string }[] = [];
+  const seenIds = new Set<string>();
+
+  for (let i = 1; i < lines.length; i++) {
+    const raw = lines[i];
+    const cols = raw.split(",").map((c) => c.trim().replace(/^["']|["']$/g, ""));
+    const collegeId = cols[colIndex.collegeId] || "";
+    const name = cols[colIndex.name] || "";
+    const messId = colIndex.messId !== -1 ? cols[colIndex.messId] : undefined;
+
+    if (!collegeId) {
+      invalid.push({ row: i + 1, raw, reason: "Missing college ID" });
+    } else if (!/^[a-zA-Z0-9_-]{2,40}$/.test(collegeId)) {
+      invalid.push({ row: i + 1, raw, reason: "College ID must be 2-40 alphanumeric characters" });
+    } else if (seenIds.has(collegeId.toUpperCase())) {
+      invalid.push({ row: i + 1, raw, reason: "Duplicate college ID in this file" });
+    } else if (!name || name.length < 2) {
+      invalid.push({ row: i + 1, raw, reason: "Student name must be at least 2 characters" });
+    } else {
+      seenIds.add(collegeId.toUpperCase());
+      valid.push({ collegeId: collegeId.toUpperCase(), name, messId: messId || undefined });
+    }
+  }
+  return { valid, invalid };
 }
 
 function PolicyForm({
@@ -274,6 +356,64 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState("");
   const [meal, setMeal] = useState<Meal>("lunch");
+  const [modal, setModal] = useState<
+    "add" | "import" | "reset-pin" | "deactivate" | "manual-leave" | null
+  >(null);
+  const [targetStudent, setTargetStudent] = useState<
+    (User & { balance: number }) | null
+  >(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [paginatedStudents, setPaginatedStudents] =
+    useState<PaginatedStudents | null>(null);
+
+  // New Student form state
+  const [newStudent, setNewStudent] = useState({
+    name: "",
+    collegeId: "",
+    pin: "",
+    messId: "",
+  });
+
+  // Reset PIN form state
+  const [newPinValue, setNewPinValue] = useState("");
+
+  // CSV Import state
+  const [csvPreview, setCsvPreview] = useState<{
+    valid: { collegeId: string; name: string; messId?: string }[];
+    invalid: { row: number; raw: string; reason: string }[];
+  } | null>(null);
+  const [csvDefaultPin, setCsvDefaultPin] = useState("");
+  const [csvCredentials, setCsvCredentials] = useState<
+    { collegeId: string; name: string; pin: string }[] | null
+  >(null);
+  const [csvSummary, setCsvSummary] = useState<{
+    imported: number;
+    errors: any[];
+  } | null>(null);
+
+  // Manual Leave form state
+  const [manualLeaveData, setManualLeaveData] = useState({
+    userId: "",
+    startsOn: "",
+    endsOn: "",
+    reason: "",
+  });
+
+  const loadAccounts = useCallback(
+    async (p = page, limit = pageSize, s = search) => {
+      try {
+        const res = await api<PaginatedStudents>(
+          `/manager/students?page=${p}&limit=${limit}&search=${encodeURIComponent(s)}`,
+        );
+        setPaginatedStudents(res);
+      } catch {
+        // Fallback to data.students if error
+      }
+    },
+    [api, page, pageSize, search],
+  );
+
   const load = useCallback(async () => {
     try {
       setData(await api<ManagerOverview>("/manager/overview"));
@@ -282,13 +422,16 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
       setError(e instanceof Error ? e.message : "Unable to load dashboard.");
     }
   }, [api]);
+
   useEffect(() => {
     if (ready && user?.role === "manager") {
       void load();
+      if (view === "accounts") void loadAccounts();
       const timer = setInterval(() => void load(), 30000);
       return () => clearInterval(timer);
     }
-  }, [ready, user, load]);
+  }, [ready, user, load, view, loadAccounts]);
+
   async function mutate(
     path: string,
     body: Record<string, unknown>,
@@ -300,10 +443,165 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
     try {
       await api(path, method, body);
       await load();
+      if (view === "accounts") await loadAccounts(page, pageSize, search);
     } catch (e) {
       const message = e instanceof Error ? e.message : "Unable to save.";
       setError(message);
       throw new Error(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleSearchChange(val: string) {
+    setSearch(val);
+    setPage(1);
+    void loadAccounts(1, pageSize, val);
+  }
+
+  async function handleCreateStudent(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await api("/manager/students", "POST", {
+        name: newStudent.name.trim(),
+        collegeId: newStudent.collegeId.trim(),
+        pin: newStudent.pin,
+        messId: newStudent.messId || user?.messId || "south-mess",
+      });
+      setNotice(`Student ${newStudent.name} created successfully.`);
+      setNewStudent({ name: "", collegeId: "", pin: "", messId: "" });
+      setModal(null);
+      await Promise.all([load(), loadAccounts(page, pageSize, search)]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create student.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleResetPin(e: FormEvent) {
+    e.preventDefault();
+    if (!targetStudent) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await api("/manager/students/reset-pin", "POST", {
+        userId: targetStudent.id,
+        pin: newPinValue,
+      });
+      setNotice(
+        `PIN for ${targetStudent.name} updated. Active sessions have been revoked.`,
+      );
+      setNewPinValue("");
+      setModal(null);
+      setTargetStudent(null);
+      await loadAccounts(page, pageSize, search);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to reset PIN.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleToggleStatus() {
+    if (!targetStudent) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    const nextStatus = !targetStudent.active;
+    try {
+      await api("/manager/students/status", "PATCH", {
+        userId: targetStudent.id,
+        active: nextStatus,
+      });
+      setNotice(
+        nextStatus
+          ? `Account for ${targetStudent.name} is now active.`
+          : `Account for ${targetStudent.name} deactivated and active sessions revoked.`,
+      );
+      setModal(null);
+      setTargetStudent(null);
+      await Promise.all([load(), loadAccounts(page, pageSize, search)]);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to update account status.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleCsvFile(file: File) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = String(e.target?.result ?? "");
+      const result = parseStudentCsv(text);
+      setCsvPreview(result);
+      setCsvSummary(null);
+      setCsvCredentials(null);
+    };
+    reader.readAsText(file);
+  }
+
+  async function handleImportCsv() {
+    if (!csvPreview || !csvPreview.valid.length) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await api<{
+        imported: number;
+        errors: any[];
+        credentials: { collegeId: string; name: string; pin: string }[];
+      }>("/manager/students/import", "POST", {
+        students: csvPreview.valid,
+        defaultPin: csvDefaultPin || undefined,
+      });
+      setCsvSummary({ imported: res.imported, errors: res.errors });
+      setCsvCredentials(res.credentials);
+      setNotice(`Successfully imported ${res.imported} students.`);
+      await Promise.all([load(), loadAccounts(1, pageSize, "")]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "CSV import failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleManualLeave(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await api("/manager/leaves/manual", "POST", manualLeaveData);
+      setNotice("Official leave approved and recorded.");
+      setModal(null);
+      setManualLeaveData({ userId: "", startsOn: "", endsOn: "", reason: "" });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to record leave.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reviewLeaveRequest(
+    leaveId: string,
+    status: "approved" | "rejected",
+  ) {
+    setBusy(true);
+    setError("");
+    try {
+      await api("/manager/leaves/review", "PATCH", { leaveId, status });
+      setNotice(`Leave request ${status}.`);
+      await load();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : `Failed to ${status} leave.`,
+      );
     } finally {
       setBusy(false);
     }
@@ -690,21 +988,151 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
                   </p>
                 </section>
               </div>
+              <section className="panel" style={{ marginTop: "24px" }}>
+                <div className="panel-heading">
+                  <div>
+                    <h2>
+                      Student leave requests ({data.pendingLeaves?.length ?? 0}{" "}
+                      pending)
+                    </h2>
+                    <p>
+                      Review leave applications submitted by students or record
+                      approved leaves directly.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="button secondary small"
+                    onClick={() => setModal("manual-leave")}
+                  >
+                    <Plus size={15} /> Record manual leave
+                  </button>
+                </div>
+                {data.pendingLeaves && data.pendingLeaves.length > 0 ? (
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Student</th>
+                          <th>College ID</th>
+                          <th>Leave Period</th>
+                          <th>Reason</th>
+                          <th>Submitted</th>
+                          <th>Decision</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.pendingLeaves.map((l) => (
+                          <tr key={l.id}>
+                            <td>
+                              <strong>{l.studentName || "Student"}</strong>
+                            </td>
+                            <td>
+                              <code>{l.collegeId || "—"}</code>
+                            </td>
+                            <td>
+                              <strong>{l.startsOn}</strong> →{" "}
+                              <strong>{l.endsOn}</strong>
+                            </td>
+                            <td>
+                              {l.reason || (
+                                <span className="muted">None provided</span>
+                              )}
+                            </td>
+                            <td className="small muted">
+                              {l.createdAt
+                                ? new Date(l.createdAt).toLocaleDateString()
+                                : "—"}
+                            </td>
+                            <td>
+                              <div style={{ display: "flex", gap: "6px" }}>
+                                <button
+                                  className="button primary small"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    reviewLeaveRequest(l.id, "approved")
+                                  }
+                                >
+                                  <Check size={13} /> Approve
+                                </button>
+                                <button
+                                  className="button secondary small"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    reviewLeaveRequest(l.id, "rejected")
+                                  }
+                                >
+                                  <X size={13} /> Reject
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <Empty>
+                    No pending leave requests. Students can submit leave requests
+                    from their portal.
+                  </Empty>
+                )}
+              </section>
             </>
           )}
           {view === "accounts" && (
             <div className="accounts-grid">
               <section className="panel">
-                <div className="panel-heading">
-                  <h2>{data.students.length} student accounts</h2>
-                  <div className="search-input">
-                    <Search size={16} />
-                    <input
-                      aria-label="Find student"
-                      placeholder="Search name or college ID"
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                    />
+                <div
+                  className="panel-heading"
+                  style={{ flexWrap: "wrap", gap: "12px" }}
+                >
+                  <div>
+                    <h2>
+                      {paginatedStudents
+                        ? paginatedStudents.total
+                        : data.students.length}{" "}
+                      student accounts
+                    </h2>
+                    <p className="small muted">
+                      Search, register, import, and manage student credentials and
+                      access.
+                    </p>
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "8px",
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <button
+                      className="button primary small"
+                      onClick={() => setModal("add")}
+                    >
+                      <UserPlus size={15} /> Add student
+                    </button>
+                    <button
+                      className="button secondary small"
+                      onClick={() => {
+                        setCsvSummary(null);
+                        setCsvCredentials(null);
+                        setCsvPreview(null);
+                        setModal("import");
+                      }}
+                    >
+                      <UploadCloud size={15} /> Import CSV
+                    </button>
+                    <div className="search-input">
+                      <Search size={16} />
+                      <input
+                        aria-label="Find student"
+                        placeholder="Search name or college ID"
+                        value={search}
+                        onChange={(e) => handleSearchChange(e.target.value)}
+                      />
+                    </div>
                   </div>
                 </div>
                 <div className="table-wrap">
@@ -713,53 +1141,220 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
                       <tr>
                         <th>Student</th>
                         <th>College ID</th>
+                        <th>Status</th>
                         <th>Balance</th>
-                        <th />
+                        <th>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {data.students
-                        .filter((s) =>
-                          `${s.name} ${s.collegeId}`
-                            .toLowerCase()
-                            .includes(search.toLowerCase()),
-                        )
-                        .map((s) => (
-                          <tr key={s.id}>
-                            <td>
-                              <span className="table-person">
-                                <span className="avatar small-avatar">
-                                  {s.name[0]}
-                                </span>
-                                <strong>{s.name}</strong>
+                      {(
+                        paginatedStudents
+                          ? paginatedStudents.students
+                          : data.students.filter((s) =>
+                              `${s.name} ${s.collegeId}`
+                                .toLowerCase()
+                                .includes(search.toLowerCase()),
+                            )
+                      ).map((s) => (
+                        <tr
+                          key={s.id}
+                          style={{ opacity: s.active ? 1 : 0.65 }}
+                        >
+                          <td>
+                            <span className="table-person">
+                              <span className="avatar small-avatar">
+                                {s.name[0]}
                               </span>
-                            </td>
-                            <td>{s.collegeId}</td>
-                            <td
-                              className={
-                                s.balance < 0 ? "negative" : "positive"
-                              }
+                              <div>
+                                <strong>{s.name}</strong>
+                                {!s.active && (
+                                  <div className="small muted">
+                                    Account deactivated
+                                  </div>
+                                )}
+                              </div>
+                            </span>
+                          </td>
+                          <td>
+                            <code>{s.collegeId}</code>
+                          </td>
+                          <td>
+                            <span
+                              className={`badge ${s.active ? "green" : "neutral"}`}
                             >
-                              {formatMoney(s.balance)}
-                            </td>
-                            <td>
+                              {s.active ? "Active" : "Inactive"}
+                            </span>
+                          </td>
+                          <td
+                            className={
+                              s.balance < 0 ? "negative" : "positive"
+                            }
+                          >
+                            {formatMoney(s.balance)}
+                          </td>
+                          <td>
+                            <div
+                              style={{
+                                display: "flex",
+                                gap: "6px",
+                                alignItems: "center",
+                                flexWrap: "wrap",
+                              }}
+                            >
                               <button
                                 className="text-button"
                                 onClick={() => setSelected(s.id)}
                               >
-                                Adjust <ArrowRight size={13} />
+                                Adjust
                               </button>
-                            </td>
-                          </tr>
-                        ))}
+                              <button
+                                className="text-button"
+                                title="Reset student PIN"
+                                onClick={() => {
+                                  setTargetStudent(s);
+                                  setNewPinValue("");
+                                  setModal("reset-pin");
+                                }}
+                              >
+                                <KeyRound size={13} /> Reset PIN
+                              </button>
+                              <button
+                                className="text-button"
+                                style={{
+                                  color: s.active ? "#e86550" : "#5cb87a",
+                                }}
+                                onClick={() => {
+                                  setTargetStudent(s);
+                                  setModal("deactivate");
+                                }}
+                              >
+                                {s.active ? "Deactivate" : "Activate"}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
-                  {!data.students.length && (
+                  {!(
+                    paginatedStudents
+                      ? paginatedStudents.students.length
+                      : data.students.length
+                  ) && (
                     <Empty>
-                      Create student accounts with the included account creation
-                      script.
+                      {search
+                        ? "No students matching your search."
+                        : "No student accounts found. Click 'Add student' or 'Import CSV' above."}
                     </Empty>
                   )}
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginTop: "16px",
+                    padding: "8px 4px",
+                    flexWrap: "wrap",
+                    gap: "12px",
+                  }}
+                >
+                  <div className="small muted">
+                    Showing{" "}
+                    {(() => {
+                      const total = paginatedStudents
+                        ? paginatedStudents.total
+                        : data.students.length;
+                      if (total === 0) return 0;
+                      return (page - 1) * pageSize + 1;
+                    })()}{" "}
+                    to{" "}
+                    {(() => {
+                      const total = paginatedStudents
+                        ? paginatedStudents.total
+                        : data.students.length;
+                      return Math.min(page * pageSize, total);
+                    })()}{" "}
+                    of{" "}
+                    {paginatedStudents
+                      ? paginatedStudents.total
+                      : data.students.length}{" "}
+                    students
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "12px",
+                    }}
+                  >
+                    <label
+                      className="small muted"
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
+                      }}
+                    >
+                      Rows:
+                      <select
+                        value={pageSize}
+                        onChange={(e) => {
+                          const newLimit = Number(e.target.value);
+                          setPageSize(newLimit);
+                          setPage(1);
+                          void loadAccounts(1, newLimit, search);
+                        }}
+                        style={{ padding: "3px 6px", fontSize: "12px" }}
+                      >
+                        <option value={10}>10</option>
+                        <option value={25}>25</option>
+                        <option value={50}>50</option>
+                      </select>
+                    </label>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: "6px",
+                        alignItems: "center",
+                      }}
+                    >
+                      <button
+                        className="button secondary small"
+                        disabled={page <= 1 || busy}
+                        onClick={() => {
+                          const prev = Math.max(1, page - 1);
+                          setPage(prev);
+                          void loadAccounts(prev, pageSize, search);
+                        }}
+                      >
+                        <ChevronLeft size={14} /> Prev
+                      </button>
+                      <span className="small">
+                        Page {page} of{" "}
+                        {paginatedStudents
+                          ? paginatedStudents.totalPages
+                          : Math.ceil(data.students.length / pageSize) || 1}
+                      </span>
+                      <button
+                        className="button secondary small"
+                        disabled={
+                          page >=
+                            (paginatedStudents
+                              ? paginatedStudents.totalPages
+                              : Math.ceil(data.students.length / pageSize) || 1) ||
+                          busy
+                        }
+                        onClick={() => {
+                          const next = page + 1;
+                          setPage(next);
+                          void loadAccounts(next, pageSize, search);
+                        }}
+                      >
+                        Next <ChevronRight size={14} />
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </section>
               <section className="panel">
@@ -1022,6 +1617,581 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
               busy={busy}
               onSave={(body) => mutate("/manager/settings", body, "PATCH")}
             />
+          )}
+
+          {modal === "add" && (
+            <div className="modal-backdrop" onClick={() => setModal(null)}>
+              <div
+                className="modal"
+                onClick={(e) => e.stopPropagation()}
+                role="dialog"
+                aria-modal="true"
+              >
+                <button
+                  className="modal-close"
+                  onClick={() => setModal(null)}
+                  aria-label="Close"
+                >
+                  <X size={18} />
+                </button>
+                <div className="section-icon">
+                  <UserPlus size={24} />
+                </div>
+                <h2>Add student account</h2>
+                <p>
+                  Create an individual student record with an initial access
+                  PIN.
+                </p>
+                <form onSubmit={handleCreateStudent} className="form-stack">
+                  <label>
+                    Full Name
+                    <input
+                      required
+                      minLength={2}
+                      maxLength={100}
+                      placeholder="e.g. Rahul Sharma"
+                      value={newStudent.name}
+                      onChange={(e) =>
+                        setNewStudent({ ...newStudent, name: e.target.value })
+                      }
+                    />
+                  </label>
+                  <label>
+                    College ID
+                    <input
+                      required
+                      minLength={2}
+                      maxLength={40}
+                      placeholder="e.g. SM2026101"
+                      value={newStudent.collegeId}
+                      onChange={(e) =>
+                        setNewStudent({
+                          ...newStudent,
+                          collegeId: e.target.value,
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Initial PIN (6–12 digits)
+                    <input
+                      required
+                      type="password"
+                      inputMode="numeric"
+                      pattern="\d{6,12}"
+                      placeholder="6–12 numeric digits"
+                      value={newStudent.pin}
+                      onChange={(e) =>
+                        setNewStudent({ ...newStudent, pin: e.target.value })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Mess assignment
+                    <input
+                      required
+                      disabled
+                      value={newStudent.messId || user?.messId || "south-mess"}
+                    />
+                  </label>
+                  <button className="button primary full" disabled={busy}>
+                    {busy ? "Creating account…" : "Create student account"}
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {modal === "reset-pin" && targetStudent && (
+            <div className="modal-backdrop" onClick={() => setModal(null)}>
+              <div
+                className="modal"
+                onClick={(e) => e.stopPropagation()}
+                role="dialog"
+                aria-modal="true"
+              >
+                <button
+                  className="modal-close"
+                  onClick={() => setModal(null)}
+                  aria-label="Close"
+                >
+                  <X size={18} />
+                </button>
+                <div className="section-icon">
+                  <KeyRound size={24} />
+                </div>
+                <h2>Reset student PIN</h2>
+                <p>
+                  Set a new PIN for <strong>{targetStudent.name}</strong> (
+                  <code>{targetStudent.collegeId}</code>).
+                </p>
+                <div
+                  className="alert"
+                  style={{ marginBottom: "16px", fontSize: "12px" }}
+                >
+                  Setting a new PIN will immediately invalidate all active
+                  login sessions for this student.
+                </div>
+                <form onSubmit={handleResetPin} className="form-stack">
+                  <label>
+                    New 6–12 digit PIN
+                    <input
+                      required
+                      type="password"
+                      inputMode="numeric"
+                      pattern="\d{6,12}"
+                      placeholder="Enter new 6–12 digit PIN"
+                      value={newPinValue}
+                      onChange={(e) => setNewPinValue(e.target.value)}
+                    />
+                  </label>
+                  <button
+                    className="button primary full"
+                    disabled={busy || !newPinValue}
+                  >
+                    {busy ? "Updating PIN…" : "Update PIN & revoke sessions"}
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {modal === "deactivate" && targetStudent && (
+            <div className="modal-backdrop" onClick={() => setModal(null)}>
+              <div
+                className="modal"
+                onClick={(e) => e.stopPropagation()}
+                role="dialog"
+                aria-modal="true"
+              >
+                <button
+                  className="modal-close"
+                  onClick={() => setModal(null)}
+                  aria-label="Close"
+                >
+                  <X size={18} />
+                </button>
+                <div className="section-icon">
+                  {targetStudent.active ? (
+                    <UserX size={24} />
+                  ) : (
+                    <UserCheck size={24} />
+                  )}
+                </div>
+                <h2>
+                  {targetStudent.active
+                    ? "Deactivate student account?"
+                    : "Activate student account?"}
+                </h2>
+                <p>
+                  {targetStudent.active ? (
+                    <>
+                      Are you sure you want to deactivate{" "}
+                      <strong>{targetStudent.name}</strong> (
+                      <code>{targetStudent.collegeId}</code>)?
+                      <br />
+                      <br />
+                      The student will immediately be signed out from all
+                      sessions and blocked from recording meals until
+                      reactivated.
+                    </>
+                  ) : (
+                    <>
+                      Reactivate account for{" "}
+                      <strong>{targetStudent.name}</strong> (
+                      <code>{targetStudent.collegeId}</code>)?
+                      <br />
+                      <br />
+                      The student will be able to sign in and record meals again.
+                    </>
+                  )}
+                </p>
+                <div
+                  style={{ display: "flex", gap: "10px", marginTop: "16px" }}
+                >
+                  <button
+                    type="button"
+                    className="button secondary full"
+                    onClick={() => setModal(null)}
+                    disabled={busy}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="button primary full"
+                    style={
+                      targetStudent.active
+                        ? { background: "#e86550", borderColor: "#e86550" }
+                        : { background: "#5cb87a", borderColor: "#5cb87a" }
+                    }
+                    onClick={handleToggleStatus}
+                    disabled={busy}
+                  >
+                    {busy
+                      ? "Updating…"
+                      : targetStudent.active
+                        ? "Yes, deactivate account"
+                        : "Yes, activate account"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {modal === "import" && (
+            <div className="modal-backdrop" onClick={() => setModal(null)}>
+              <div
+                className="modal"
+                style={{ width: "620px", maxWidth: "95vw" }}
+                onClick={(e) => e.stopPropagation()}
+                role="dialog"
+                aria-modal="true"
+              >
+                <button
+                  className="modal-close"
+                  onClick={() => setModal(null)}
+                  aria-label="Close"
+                >
+                  <X size={18} />
+                </button>
+                <div className="section-icon">
+                  <UploadCloud size={24} />
+                </div>
+                <h2>Bulk student import</h2>
+                <p>
+                  Upload a CSV file containing student names and unique college
+                  IDs.
+                </p>
+
+                {!csvSummary ? (
+                  <div className="form-stack">
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: "8px",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <span className="small muted">
+                        Columns: <code>college_id</code>, <code>name</code>,{" "}
+                        <code>mess_id</code> (optional)
+                      </span>
+                      <button
+                        type="button"
+                        className="button secondary small"
+                        onClick={downloadSampleCsv}
+                      >
+                        <ArrowDownToLine size={13} /> Sample CSV
+                      </button>
+                    </div>
+
+                    <label>
+                      Select CSV file
+                      <input
+                        type="file"
+                        accept=".csv"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleCsvFile(file);
+                        }}
+                      />
+                    </label>
+
+                    <label>
+                      Default PIN for imported students (optional)
+                      <input
+                        type="password"
+                        inputMode="numeric"
+                        pattern="\d{6,12}"
+                        placeholder="Leave blank to generate random 6-digit PINs"
+                        value={csvDefaultPin}
+                        onChange={(e) => setCsvDefaultPin(e.target.value)}
+                      />
+                      <small className="muted">
+                        If left blank, secure individual 6-digit PINs are
+                        generated and provided in a downloadable credentials
+                        report.
+                      </small>
+                    </label>
+
+                    {csvPreview && (
+                      <div style={{ marginTop: "12px" }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "8px",
+                            marginBottom: "8px",
+                          }}
+                        >
+                          <span className="badge green">
+                            {csvPreview.valid.length} valid rows
+                          </span>
+                          {csvPreview.invalid.length > 0 && (
+                            <span className="badge red">
+                              {csvPreview.invalid.length} invalid rows
+                            </span>
+                          )}
+                        </div>
+
+                        {csvPreview.invalid.length > 0 && (
+                          <div
+                            className="alert"
+                            style={{
+                              maxHeight: "120px",
+                              overflow: "auto",
+                              fontSize: "11px",
+                              marginBottom: "10px",
+                            }}
+                          >
+                            <strong>Rows with validation errors:</strong>
+                            <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
+                              {csvPreview.invalid.map((inv, idx) => (
+                                <li key={idx}>
+                                  Row {inv.row}: {inv.reason} ({inv.raw})
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {csvPreview.valid.length > 0 && (
+                          <div
+                            className="table-wrap"
+                            style={{ maxHeight: "160px", overflow: "auto" }}
+                          >
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>College ID</th>
+                                  <th>Name</th>
+                                  <th>Mess</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {csvPreview.valid.slice(0, 8).map((v, i) => (
+                                  <tr key={i}>
+                                    <td>
+                                      <code>{v.collegeId}</code>
+                                    </td>
+                                    <td>{v.name}</td>
+                                    <td>
+                                      {v.messId ||
+                                        user?.messId ||
+                                        "south-mess"}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: "10px",
+                        marginTop: "16px",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="button secondary full"
+                        onClick={() => {
+                          setModal(null);
+                          setCsvPreview(null);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="button primary full"
+                        disabled={
+                          busy || !csvPreview || csvPreview.valid.length === 0
+                        }
+                        onClick={handleImportCsv}
+                      >
+                        {busy
+                          ? "Importing…"
+                          : `Import ${csvPreview?.valid.length ?? 0} students`}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ textAlign: "center", padding: "16px 0" }}>
+                    <div
+                      style={{
+                        margin: "0 auto 12px",
+                        width: "48px",
+                        height: "48px",
+                        borderRadius: "50%",
+                        background: "#1a2e1e",
+                        color: "#5cb87a",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Check size={28} />
+                    </div>
+                    <h3>Import Complete</h3>
+                    <p style={{ margin: "8px 0 16px" }}>
+                      Successfully created{" "}
+                      <strong>{csvSummary.imported}</strong> student accounts.
+                      {csvSummary.errors.length > 0 &&
+                        ` (${csvSummary.errors.length} rows rejected)`}
+                    </p>
+
+                    {csvCredentials && csvCredentials.length > 0 && (
+                      <div style={{ margin: "16px 0" }}>
+                        <div
+                          className="alert"
+                          style={{
+                            marginBottom: "12px",
+                            fontSize: "12px",
+                            textAlign: "left",
+                          }}
+                        >
+                          <strong>Important:</strong> Initial student
+                          credentials were generated. Download this credentials
+                          file to distribute PINs safely. Plaintext PINs are
+                          never stored or accessible again.
+                        </div>
+                        <button
+                          type="button"
+                          className="button primary full"
+                          onClick={() =>
+                            downloadCredentialsCsv(csvCredentials)
+                          }
+                        >
+                          <ArrowDownToLine size={16} /> Download credentials CSV
+                          ({csvCredentials.length})
+                        </button>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      className="button secondary full"
+                      style={{ marginTop: "12px" }}
+                      onClick={() => {
+                        setModal(null);
+                        setCsvPreview(null);
+                        setCsvSummary(null);
+                        setCsvCredentials(null);
+                      }}
+                    >
+                      Done
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {modal === "manual-leave" && (
+            <div className="modal-backdrop" onClick={() => setModal(null)}>
+              <div
+                className="modal"
+                onClick={(e) => e.stopPropagation()}
+                role="dialog"
+                aria-modal="true"
+              >
+                <button
+                  className="modal-close"
+                  onClick={() => setModal(null)}
+                  aria-label="Close"
+                >
+                  <X size={18} />
+                </button>
+                <div className="section-icon">
+                  <CalendarDays size={24} />
+                </div>
+                <h2>Record approved student leave</h2>
+                <p>
+                  Directly record an authorized leave on behalf of a student.
+                </p>
+                <form onSubmit={handleManualLeave} className="form-stack">
+                  <label>
+                    Student
+                    <select
+                      required
+                      value={manualLeaveData.userId}
+                      onChange={(e) =>
+                        setManualLeaveData({
+                          ...manualLeaveData,
+                          userId: e.target.value,
+                        })
+                      }
+                    >
+                      <option value="">Select student</option>
+                      {data.students.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name} ({s.collegeId})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Starts on (YYYY-MM-DD)
+                    <input
+                      required
+                      type="date"
+                      value={manualLeaveData.startsOn}
+                      onChange={(e) =>
+                        setManualLeaveData({
+                          ...manualLeaveData,
+                          startsOn: e.target.value,
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Ends on (YYYY-MM-DD)
+                    <input
+                      required
+                      type="date"
+                      min={manualLeaveData.startsOn || undefined}
+                      value={manualLeaveData.endsOn}
+                      onChange={(e) =>
+                        setManualLeaveData({
+                          ...manualLeaveData,
+                          endsOn: e.target.value,
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Official reason or authorization reference
+                    <textarea
+                      required
+                      rows={2}
+                      minLength={2}
+                      maxLength={300}
+                      placeholder="e.g. Sanctioned leave ref #104"
+                      value={manualLeaveData.reason}
+                      onChange={(e) =>
+                        setManualLeaveData({
+                          ...manualLeaveData,
+                          reason: e.target.value,
+                        })
+                      }
+                    />
+                  </label>
+                  <button
+                    className="button primary full"
+                    disabled={busy || !manualLeaveData.userId}
+                  >
+                    {busy ? "Saving leave…" : "Record & approve leave"}
+                  </button>
+                </form>
+              </div>
+            </div>
           )}
         </>
       )}

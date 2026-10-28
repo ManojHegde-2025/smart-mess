@@ -54,6 +54,7 @@ before(async () => {
     now: Date.parse("2026-10-19T07:30:00Z"),
   });
   await getPool().query(await readFile("db/001_initial.sql", "utf8"));
+  await getPool().query(await readFile("db/002_leave_requests.sql", "utf8"));
   await query(
     "TRUNCATE integration_events,login_attempts,audit_logs,meal_usage,leaves,ledger_entries,meal_events,settings,users CASCADE",
   );

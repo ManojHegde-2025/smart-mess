@@ -55,9 +55,18 @@ def forecast(request: ForecastRequest) -> dict:
     rows = sorted(request.history, key=lambda row: row.date)
     values = [float(row.count) for row in rows]
     horizon = (request.target_date - rows[-1].date).days
-    contiguous = all(rows[i].date == rows[i - 1].date + timedelta(days=1) for i in range(1, len(rows)))
+
+    # Identify the most recent contiguous block ending at the latest observation
+    tail_start = len(rows) - 1
+    while tail_start > 0 and rows[tail_start].date == rows[tail_start - 1].date + timedelta(days=1):
+        tail_start -= 1
+    recent_rows = rows[tail_start:]
+    recent_values = values[tail_start:]
+
+    # History is considered usable if the recent block ending at rows[-1] has sufficient unbroken observations
+    contiguous = (tail_start == 0) or (len(recent_rows) >= MIN_ML_DAYS)
     supported = 1 <= horizon <= 7
-    predicted = (project(None, values, rows[-1].date, horizon)
+    predicted = (project(None, recent_values if len(recent_rows) >= MIN_ML_DAYS else values, rows[-1].date, horizon)
                  if contiguous and supported else float(np.mean(values[-7:])))
     method = "7-day rolling baseline"
     status = "insufficient_history"
@@ -69,28 +78,30 @@ def forecast(request: ForecastRequest) -> dict:
         status, reason = "gapped_history", "Missing service days are not assumed to be zero; using the observed-count baseline."
     elif not supported:
         status, reason = "unsupported_horizon", "The trained model supports targets up to seven days after the last completed observation."
-    elif len(rows) >= MIN_ML_DAYS:
-        holdout = min(14, max(7, len(rows) // 5))
-        first_target = len(rows) - holdout
+    elif len(recent_rows) >= MIN_ML_DAYS:
+        train_rows = recent_rows
+        train_values = recent_values
+        holdout = min(14, max(7, len(train_rows) // 5))
+        first_target = len(train_rows) - holdout
         # The candidate is trained only on observations available at the FIRST origin.
         train_end = first_target - horizon + 1
-        x = [features(rows[i].date, values[:i]) for i in range(14, len(rows))]
-        y = values[14:]
+        x = [features(train_rows[i].date, train_values[:i]) for i in range(14, len(train_rows))]
+        y = train_values[14:]
         model = RandomForestRegressor(n_estimators=96, max_depth=8,
                                       min_samples_leaf=2, random_state=42, n_jobs=1)
         model.fit(x[:train_end - 14], y[:train_end - 14])
         candidate_errors, baseline_errors = [], []
-        for i in range(first_target, len(rows)):
+        for i in range(first_target, len(train_rows)):
             origin = i - horizon
-            available = values[:origin + 1]
-            candidate_errors.append(abs(values[i] - project(model, available, rows[origin].date, horizon)))
-            baseline_errors.append(abs(values[i] - project(None, available, rows[origin].date, horizon)))
+            available = train_values[:origin + 1]
+            candidate_errors.append(abs(train_values[i] - project(model, available, train_rows[origin].date, horizon)))
+            baseline_errors.append(abs(train_values[i] - project(None, available, train_rows[origin].date, horizon)))
         candidate_mae = float(np.mean(candidate_errors))
         baseline_mae = float(np.mean(baseline_errors))
         evaluation_rows = holdout
         if candidate_mae < baseline_mae:
             model.fit(x, y)
-            predicted = project(model, values, rows[-1].date, horizon)
+            predicted = project(model, train_values, train_rows[-1].date, horizon)
             method = "Random Forest v2"
             status = "selected"
             reason = "Random Forest improved on the rolling baseline at the same forecast horizon."

@@ -5,9 +5,12 @@ let pool: Pool | undefined;
 export function getPool() {
   if (!process.env.DATABASE_URL)
     throw new Error("DATABASE_URL is required in live mode");
+  const max = process.env.DATABASE_POOL_SIZE
+    ? parseInt(process.env.DATABASE_POOL_SIZE, 10)
+    : 10;
   pool ??= new Pool({
     connectionString: process.env.DATABASE_URL,
-    max: 3,
+    max,
     connectionTimeoutMillis: 5000,
     idleTimeoutMillis: 10000,
     allowExitOnIdle: true,

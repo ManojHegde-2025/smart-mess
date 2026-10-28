@@ -11,9 +11,11 @@ import {
   MEALS,
   type LedgerEntry,
   type Leave,
+  type LeaveStatus,
   type ManagerOverview,
   type Meal,
   type MealEvent,
+  type PaginatedStudents,
   type ScanResult,
   type Settings,
   type StudentOverview,
@@ -22,8 +24,16 @@ import {
 } from "./types";
 import {
   addonSchema,
+  bulkImportSchema,
+  cancelLeaveSchema,
+  createStudentSchema,
   ledgerSchema,
+  manualLeaveSchema,
+  resetPinSchema,
+  reviewLeaveSchema,
   settingsSchema,
+  studentLeaveRequestSchema,
+  updateStatusSchema,
   usageSchema,
 } from "./validation";
 
@@ -119,17 +129,47 @@ function seed(): DemoState {
       note: `${e.meal} · ${e.serviceDate}`,
       createdAt: e.scannedAt,
     });
-  const leaves = users
-    .filter((u) => u.role === "student")
-    .slice(2, 6)
-    .map((u) => ({
+  const leaves: Leave[] = [
+    ...users
+      .filter((u) => u.role === "student")
+      .slice(2, 5)
+      .map((u) => ({
+        id: crypto.randomUUID(),
+        userId: u.id,
+        studentName: u.name,
+        collegeId: u.collegeId,
+        startsOn: today,
+        endsOn: addDays(today, 2),
+        status: "approved" as LeaveStatus,
+        source: "warden",
+        reason: "Official hostel leave",
+        createdAt: new Date().toISOString(),
+      })),
+    {
       id: crypto.randomUUID(),
-      userId: u.id,
-      startsOn: today,
-      endsOn: addDays(today, 2),
-      status: "approved" as const,
-      source: "demo fixture",
-    }));
+      userId: users[5].id,
+      studentName: users[5].name,
+      collegeId: users[5].collegeId,
+      startsOn: addDays(today, 1),
+      endsOn: addDays(today, 4),
+      status: "pending" as LeaveStatus,
+      source: "student_request",
+      reason: "Family function in hometown",
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: crypto.randomUUID(),
+      userId: users[6].id,
+      studentName: users[6].name,
+      collegeId: users[6].collegeId,
+      startsOn: addDays(today, 2),
+      endsOn: addDays(today, 5),
+      status: "pending" as LeaveStatus,
+      source: "student_request",
+      reason: "Attending inter-college symposium",
+      createdAt: new Date().toISOString(),
+    },
+  ];
   return {
     date: today,
     user: null,
@@ -143,7 +183,15 @@ function seed(): DemoState {
     requests: [],
   };
 }
+let memoryState: DemoState | null = null;
+
 function load(): DemoState {
+  if (typeof localStorage === "undefined") {
+    if (!memoryState || memoryState.date !== localTime().date) {
+      memoryState = seed();
+    }
+    return memoryState;
+  }
   try {
     const value = JSON.parse(localStorage.getItem(KEY) ?? "null");
     if (value?.date === localTime().date && Array.isArray(value.users))
@@ -156,10 +204,17 @@ function load(): DemoState {
   return state;
 }
 function save(state: DemoState) {
+  if (typeof localStorage === "undefined") {
+    memoryState = state;
+    return;
+  }
   localStorage.setItem(KEY, JSON.stringify(state));
 }
 export function resetDemo() {
-  localStorage.removeItem(KEY);
+  memoryState = null;
+  if (typeof localStorage !== "undefined") {
+    localStorage.removeItem(KEY);
+  }
 }
 export async function demoRequest<T>(
   path: string,
@@ -308,6 +363,49 @@ export async function demoRequest<T>(
     save(s);
     return { ok: true } as T;
   }
+  if (path === "/student/leaves" && method === "POST") {
+    const input = studentLeaveRequestSchema.parse(body);
+    const overlap = s.leaves.some(
+      (l) =>
+        l.userId === s.user!.id &&
+        (l.status === "pending" || l.status === "approved") &&
+        l.startsOn <= input.endsOn &&
+        l.endsOn >= input.startsOn,
+    );
+    if (overlap) {
+      throw new Error(
+        "You already have a pending or approved leave covering this period.",
+      );
+    }
+    const id = crypto.randomUUID();
+    s.leaves.unshift({
+      id,
+      userId: s.user!.id,
+      studentName: s.user!.name,
+      collegeId: s.user!.collegeId,
+      startsOn: input.startsOn,
+      endsOn: input.endsOn,
+      status: "pending",
+      source: "student_request",
+      reason: input.reason,
+      createdAt: new Date().toISOString(),
+    });
+    save(s);
+    return { ok: true, id } as T;
+  }
+  if (path === "/student/leaves/cancel" && method === "POST") {
+    const input = cancelLeaveSchema.parse(body);
+    const leave = s.leaves.find(
+      (l) => l.id === input.leaveId && l.userId === s.user!.id,
+    );
+    if (!leave) throw new Error("Leave request not found.");
+    if (leave.status !== "pending") {
+      throw new Error("Only pending leave requests can be cancelled.");
+    }
+    leave.status = "cancelled";
+    save(s);
+    return { ok: true } as T;
+  }
   if (s.user.role !== "manager") throw new Error("Manager access required.");
   if (path === "/manager/overview") {
     const counts = emptyCounts(),
@@ -335,6 +433,7 @@ export async function demoRequest<T>(
           )
           .map((l) => l.userId),
       ).size,
+      pendingLeaves: s.leaves.filter((l) => l.status === "pending"),
       exceptions: s.events.filter(
         (e) => e.serviceDate === s.date && e.reason !== "ACCEPTED",
       ),
@@ -404,6 +503,156 @@ export async function demoRequest<T>(
     audit("ledger.adjusted", input.note);
     save(s);
     return { ok: true } as T;
+  }
+  if (path.startsWith("/manager/students") && method === "GET") {
+    const searchParams = new URLSearchParams(path.split("?")[1] ?? "");
+    const page = Math.max(1, Number(searchParams.get("page") ?? 1));
+    const limit = Math.min(100, Math.max(1, Number(searchParams.get("limit") ?? 25)));
+    const search = (searchParams.get("search") ?? "").trim().toLowerCase();
+
+    const filtered = s.users
+      .filter((u) => u.role === "student")
+      .filter((u) =>
+        search ? `${u.name} ${u.collegeId}`.toLowerCase().includes(search) : true,
+      );
+
+    const total = filtered.length;
+    const totalPages = Math.ceil(total / limit) || 1;
+    const offset = (page - 1) * limit;
+    const paged = filtered.slice(offset, offset + limit);
+
+    const paginated: PaginatedStudents = {
+      students: paged.map((u) => ({ ...u, balance: balance(u.id) })),
+      total,
+      page,
+      limit,
+      totalPages,
+    };
+    return paginated as T;
+  }
+  if (path === "/manager/students" && method === "POST") {
+    const input = createStudentSchema.parse(body);
+    const cid = input.collegeId.trim().toUpperCase();
+    if (s.users.some((u) => u.collegeId === cid)) {
+      throw new Error("A student with this college ID already exists.");
+    }
+    const newUser: User = {
+      id: crypto.randomUUID(),
+      collegeId: cid,
+      name: input.name.trim(),
+      role: "student",
+      messId: input.messId || s.user.messId,
+      active: true,
+    };
+    s.users.push(newUser);
+    audit("student.created", JSON.stringify({ studentId: newUser.id, collegeId: cid, name: newUser.name }));
+    save(s);
+    return { ok: true, user: { ...newUser, balance: 0 } } as T;
+  }
+  if (path === "/manager/students/reset-pin" && method === "POST") {
+    const input = resetPinSchema.parse(body);
+    const student = s.users.find((u) => u.id === input.userId && u.role === "student");
+    if (!student) throw new Error("Student not found.");
+    audit("student.pin-reset", JSON.stringify({ studentId: input.userId, collegeId: student.collegeId }));
+    save(s);
+    return { ok: true } as T;
+  }
+  if (path === "/manager/students/status" && method === "PATCH") {
+    const input = updateStatusSchema.parse(body);
+    const student = s.users.find((u) => u.id === input.userId && u.role === "student");
+    if (!student) throw new Error("Student not found.");
+    student.active = input.active;
+    audit("student.status-updated", JSON.stringify({ studentId: input.userId, collegeId: student.collegeId, active: input.active }));
+    save(s);
+    return { ok: true, active: input.active } as T;
+  }
+  if (path === "/manager/students/import" && method === "POST") {
+    const input = bulkImportSchema.parse(body);
+    const seenIds = new Set<string>();
+    const existingIds = new Set(s.users.map((u) => u.collegeId));
+    const errors: { row: number; collegeId: string; reason: string }[] = [];
+    const credentials: { collegeId: string; name: string; pin: string }[] = [];
+    let count = 0;
+
+    for (let i = 0; i < input.students.length; i++) {
+      const row = input.students[i];
+      const rowNum = i + 1;
+      const cid = row.collegeId.trim().toUpperCase();
+      const name = row.name.trim();
+      const messId = row.messId || s.user.messId;
+
+      if (!cid) {
+        errors.push({ row: rowNum, collegeId: cid, reason: "College ID is required" });
+        continue;
+      }
+      if (seenIds.has(cid)) {
+        errors.push({ row: rowNum, collegeId: cid, reason: "Duplicate college ID in import batch" });
+        continue;
+      }
+      seenIds.add(cid);
+
+      if (existingIds.has(cid)) {
+        errors.push({ row: rowNum, collegeId: cid, reason: "College ID already registered in system" });
+        continue;
+      }
+
+      const pin = input.defaultPin || String(Math.floor(100000 + Math.random() * 900000));
+      s.users.push({
+        id: crypto.randomUUID(),
+        collegeId: cid,
+        name,
+        role: "student",
+        messId,
+        active: true,
+      });
+      existingIds.add(cid);
+      credentials.push({ collegeId: cid, name, pin });
+      count++;
+    }
+
+    audit("student.bulk-imported", JSON.stringify({ count, errors: errors.length }));
+    save(s);
+    return { imported: count, errors, credentials } as T;
+  }
+  if (path === "/manager/leaves/review" && method === "PATCH") {
+    const input = reviewLeaveSchema.parse(body);
+    const leave = s.leaves.find((l) => l.id === input.leaveId && l.status === "pending");
+    if (!leave) throw new Error("Pending leave request not found.");
+    leave.status = input.status;
+    audit(`leave.${input.status}`, JSON.stringify({ leaveId: input.leaveId, status: input.status, studentId: leave.userId }));
+    save(s);
+    return { ok: true, status: input.status } as T;
+  }
+  if (path === "/manager/leaves/manual" && method === "POST") {
+    const input = manualLeaveSchema.parse(body);
+    const student = s.users.find((u) => u.id === input.userId && u.role === "student");
+    if (!student) throw new Error("Student not found.");
+    const overlap = s.leaves.some(
+      (l) =>
+        l.userId === input.userId &&
+        l.status === "approved" &&
+        l.startsOn <= input.endsOn &&
+        l.endsOn >= input.startsOn,
+    );
+    if (overlap) {
+      throw new Error("Student already has an approved leave during this period.");
+    }
+    const id = crypto.randomUUID();
+    s.leaves.unshift({
+      id,
+      userId: input.userId,
+      studentName: student.name,
+      collegeId: student.collegeId,
+      startsOn: input.startsOn,
+      endsOn: input.endsOn,
+      status: "approved",
+      source: "manager_manual",
+      reason: input.reason,
+      createdAt: new Date().toISOString(),
+    });
+    audit("leave.manual-approved", JSON.stringify({ leaveId: id, studentId: input.userId, collegeId: student.collegeId }));
+    save(s);
+    return { ok: true, id } as T;
   }
   throw new Error("This action is unavailable.");
 }

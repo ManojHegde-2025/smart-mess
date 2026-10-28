@@ -345,6 +345,12 @@ export function Student() {
   const [result, setResult] = useState<ScanResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<"meals" | "ledger" | "leave">("meals");
+  const [requestLeaveModal, setRequestLeaveModal] = useState(false);
+  const [leaveForm, setLeaveForm] = useState({
+    startsOn: "",
+    endsOn: "",
+    reason: "",
+  });
   const load = useCallback(async () => {
     try {
       setData(await api<StudentOverview>("/student/overview"));
@@ -388,6 +394,44 @@ export function Student() {
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to add item.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function handleSubmitLeave(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await api("/student/leaves", "POST", {
+        startsOn: leaveForm.startsOn,
+        endsOn: leaveForm.endsOn,
+        reason: leaveForm.reason.trim() || undefined,
+      });
+      setNotice("Leave request submitted successfully for manager review.");
+      setRequestLeaveModal(false);
+      await load();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to submit leave request.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function handleCancelLeave(leaveId: string) {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await api("/student/leaves/cancel", "POST", { leaveId });
+      setNotice("Leave request cancelled.");
+      await load();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to cancel leave request.",
+      );
     } finally {
       setBusy(false);
     }
@@ -610,28 +654,102 @@ export function Student() {
                 ) : (
                   <Empty>Your credits and meal charges will appear here.</Empty>
                 )
-              ) : data.leaves.length ? (
-                <div className="activity-list">
-                  {data.leaves.map((l) => (
-                    <div className="activity-row" key={l.id}>
-                      <span className="activity-icon">
-                        <Clock3 size={16} />
-                      </span>
-                      <div>
-                        <strong>
-                          {l.startsOn} → {l.endsOn}
-                        </strong>
-                        <small>From {l.source}</small>
-                      </div>
-                      <span className="badge neutral">{l.status}</span>
-                    </div>
-                  ))}
-                </div>
               ) : (
-                <Empty>
-                  No leave records. Apply for leave using your existing Warden
-                  app.
-                </Empty>
+                <>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      marginBottom: "12px",
+                      marginTop: "4px",
+                    }}
+                  >
+                    <span className="small muted">
+                      Approved leaves adjust your meal forecast and scan status.
+                    </span>
+                    <button
+                      type="button"
+                      className="button primary small"
+                      onClick={() => {
+                        setLeaveForm({
+                          startsOn: data.today,
+                          endsOn: data.today,
+                          reason: "",
+                        });
+                        setRequestLeaveModal(true);
+                      }}
+                    >
+                      <Plus size={14} /> Request leave
+                    </button>
+                  </div>
+                  {data.leaves.length ? (
+                    <div className="activity-list">
+                      {data.leaves.map((l) => (
+                        <div className="activity-row" key={l.id}>
+                          <span className="activity-icon">
+                            <Clock3 size={16} />
+                          </span>
+                          <div>
+                            <strong>
+                              {l.startsOn} → {l.endsOn}
+                            </strong>
+                            <small>
+                              {l.reason ? `${l.reason} · ` : ""}
+                              {l.source === "student_request"
+                                ? "Your request"
+                                : l.source === "manager_manual"
+                                  ? "Manager sanctioned"
+                                  : `From ${l.source}`}
+                            </small>
+                          </div>
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                            }}
+                          >
+                            <span
+                              className={`badge ${
+                                l.status === "approved"
+                                  ? "green"
+                                  : l.status === "pending"
+                                    ? "amber"
+                                    : l.status === "rejected"
+                                      ? "red"
+                                      : "neutral"
+                              }`}
+                            >
+                              {l.status === "pending"
+                                ? "Pending review"
+                                : l.status}
+                            </span>
+                            {l.status === "pending" && (
+                              <button
+                                type="button"
+                                className="text-button"
+                                style={{
+                                  color: "#e86550",
+                                  fontSize: "12px",
+                                }}
+                                disabled={busy}
+                                onClick={() => handleCancelLeave(l.id)}
+                              >
+                                Cancel
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <Empty>
+                      No leave records. Request leave using the button above or
+                      apply through your hostel warden.
+                    </Empty>
+                  )}
+                </>
               )}
             </section>
             <section className="panel addons-panel">
@@ -680,6 +798,92 @@ export function Student() {
             <Scanner onScan={scan} onClose={() => setScanning(false)} />
           )}{" "}
           {result && <Result result={result} onClose={() => setResult(null)} />}
+          {requestLeaveModal && (
+            <div
+              className="modal-backdrop"
+              onClick={() => setRequestLeaveModal(false)}
+            >
+              <div
+                className="modal"
+                onClick={(e) => e.stopPropagation()}
+                role="dialog"
+                aria-modal="true"
+              >
+                <button
+                  className="modal-close"
+                  onClick={() => setRequestLeaveModal(false)}
+                  aria-label="Close"
+                >
+                  <X size={18} />
+                </button>
+                <div className="section-icon">
+                  <Clock3 size={24} />
+                </div>
+                <h2>Request mess leave</h2>
+                <p>
+                  Notify the mess management of planned absences to help reduce
+                  food waste.
+                </p>
+                <form onSubmit={handleSubmitLeave} className="form-stack">
+                  <label>
+                    Leave begins on (YYYY-MM-DD)
+                    <input
+                      required
+                      type="date"
+                      min={data.today}
+                      value={leaveForm.startsOn}
+                      onChange={(e) =>
+                        setLeaveForm({ ...leaveForm, startsOn: e.target.value })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Leave ends on (YYYY-MM-DD)
+                    <input
+                      required
+                      type="date"
+                      min={leaveForm.startsOn || data.today}
+                      value={leaveForm.endsOn}
+                      onChange={(e) =>
+                        setLeaveForm({ ...leaveForm, endsOn: e.target.value })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Reason (optional)
+                    <textarea
+                      rows={2}
+                      maxLength={300}
+                      placeholder="e.g. Visiting hometown, attending seminar"
+                      value={leaveForm.reason}
+                      onChange={(e) =>
+                        setLeaveForm({ ...leaveForm, reason: e.target.value })
+                      }
+                    />
+                  </label>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "10px",
+                      marginTop: "12px",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="button secondary full"
+                      onClick={() => setRequestLeaveModal(false)}
+                      disabled={busy}
+                    >
+                      Cancel
+                    </button>
+                    <button className="button primary full" disabled={busy}>
+                      {busy ? "Submitting…" : "Submit leave request"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
         </>
       )}
     </Shell>

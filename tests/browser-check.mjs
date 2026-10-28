@@ -76,6 +76,13 @@ try {
   await page.getByRole("heading", { name: "Your mess, at a glance" }).waitFor();
   await page.getByRole("link", { name: "Student accounts" }).click();
   await page.getByRole("heading", { name: "48 student accounts" }).waitFor();
+  await page.getByRole("button", { name: "Add student" }).click();
+  await page.getByRole("heading", { name: "Add student account" }).waitFor();
+  await page.getByPlaceholder("e.g. Rahul Sharma").fill("Test Browser Student");
+  await page.getByPlaceholder("e.g. SM2026101").fill("SM2026999");
+  await page.getByPlaceholder("6–12 numeric digits").fill("123456");
+  await page.getByRole("button", { name: "Create student account" }).click();
+  await page.getByRole("status").waitFor();
   await page.getByRole("link", { name: "Reports & activity" }).click();
   await page.getByRole("heading", { name: "Preparation & service" }).waitFor();
   await page.getByRole("link", { name: "Mess settings" }).click();
@@ -113,6 +120,14 @@ try {
   await page
     .getByRole("button", { name: "Add Extra milk", exact: true })
     .click();
+  await page.getByRole("status").waitFor();
+  await page.getByRole("button", { name: "Leave status" }).click();
+  await page.getByRole("button", { name: "Request leave" }).click();
+  await page.getByRole("heading", { name: "Request mess leave" }).waitFor();
+  await page
+    .getByPlaceholder("e.g. Visiting hometown, attending seminar")
+    .fill("Visiting hometown");
+  await page.getByRole("button", { name: "Submit leave request" }).click();
   await page.getByRole("status").waitFor();
   await page.getByRole("button", { name: "Scan meal QR" }).click();
   await page.getByRole("button", { name: "Open camera", exact: true }).click();

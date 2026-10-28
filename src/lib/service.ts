@@ -1,5 +1,6 @@
 import {
   randomUUID,
+  randomInt,
   createHash,
   createHmac,
   timingSafeEqual,
@@ -7,7 +8,7 @@ import {
 import { SignJWT, jwtVerify } from "jose";
 import { sql } from "drizzle-orm";
 import { getDb, query, transaction } from "./db";
-import { secret, userFromRow } from "./auth";
+import { hashPin, secret, userFromRow } from "./auth";
 import { ApiError } from "./errors";
 import { demandForecasts } from "./forecast";
 import {
@@ -26,11 +27,21 @@ import {
   type ManagerOverview,
   type Usage,
   type MealEvent,
+  type LeaveStatus,
+  type PaginatedStudents,
 } from "./types";
 import {
   addonSchema,
+  bulkImportSchema,
+  cancelLeaveSchema,
+  createStudentSchema,
   ledgerSchema,
+  manualLeaveSchema,
+  resetPinSchema,
+  reviewLeaveSchema,
   settingsSchema,
+  studentLeaveRequestSchema,
+  updateStatusSchema,
   usageSchema,
   wardenSchema,
 } from "./validation";
@@ -69,7 +80,7 @@ export async function studentOverview(user: User): Promise<StudentOverview> {
       [user.id],
     ),
     query(
-      "SELECT *,starts_on::text,ends_on::text FROM leaves WHERE user_id=$1 ORDER BY leaves.starts_on DESC LIMIT 20",
+      "SELECT *,starts_on::text,ends_on::text,created_at::text FROM leaves WHERE user_id=$1 ORDER BY created_at DESC LIMIT 40",
       [user.id],
     ),
     query(
@@ -98,6 +109,8 @@ export async function studentOverview(user: User): Promise<StudentOverview> {
       endsOn: r.ends_on,
       status: r.status,
       source: r.source,
+      reason: r.reason ? String(r.reason) : undefined,
+      createdAt: r.created_at ? new Date(r.created_at).toISOString() : undefined,
     })),
   };
 }
@@ -244,6 +257,7 @@ export async function managerOverview(user: User): Promise<ManagerOverview> {
     exceptions,
     historyRows,
     audit,
+    pendingLeavesRows,
   ] = await Promise.all([
     query(
       "SELECT u.*,COALESCE(sum(l.amount),0)::bigint AS balance FROM users u LEFT JOIN ledger_entries l ON l.user_id=u.id WHERE u.mess_id=$1 AND u.role='student' GROUP BY u.id ORDER BY u.name",
@@ -273,6 +287,10 @@ export async function managerOverview(user: User): Promise<ManagerOverview> {
       "SELECT a.*,COALESCE(u.name,'Warden integration') AS actor FROM audit_logs a LEFT JOIN users u ON u.id=a.actor_id WHERE a.mess_id=$1 ORDER BY a.created_at DESC LIMIT 20",
       [user.messId],
     ),
+    query(
+      "SELECT l.*,l.starts_on::text,l.ends_on::text,l.created_at::text,u.name AS student_name,u.college_id FROM leaves l JOIN users u ON u.id=l.user_id WHERE u.mess_id=$1 AND l.status='pending' ORDER BY l.created_at DESC LIMIT 30",
+      [user.messId],
+    ),
   ]);
   const history = historyRows as Usage[];
   const daily = emptyCounts(),
@@ -291,6 +309,18 @@ export async function managerOverview(user: User): Promise<ManagerOverview> {
     counts: daily,
     prepared: prep,
     leaveCount: leaveCount[0].count,
+    pendingLeaves: pendingLeavesRows.map((l) => ({
+      id: String(l.id),
+      userId: String(l.user_id),
+      studentName: l.student_name ? String(l.student_name) : undefined,
+      collegeId: l.college_id ? String(l.college_id) : undefined,
+      startsOn: String(l.starts_on),
+      endsOn: String(l.ends_on),
+      status: l.status as LeaveStatus,
+      source: String(l.source),
+      reason: l.reason ? String(l.reason) : undefined,
+      createdAt: l.created_at ? new Date(String(l.created_at)).toISOString() : undefined,
+    })),
     exceptions: exceptions.map(event),
     history,
     forecasts,
@@ -509,4 +539,413 @@ export async function wardenWebhook(
 export async function databaseHealth() {
   await getDb().execute(sql`SELECT 1`);
   return { status: "ok" };
+}
+
+export async function paginatedStudents(
+  manager: User,
+  page = 1,
+  limit = 25,
+  search = "",
+): Promise<PaginatedStudents> {
+  const p = Math.max(1, page);
+  const l = Math.min(100, Math.max(1, limit));
+  const offset = (p - 1) * l;
+  const term = search.trim();
+
+  let countSql: string;
+  let countParams: unknown[];
+  let querySql: string;
+  let queryParams: unknown[];
+
+  if (term) {
+    const searchPattern = `%${term.replace(/[%_]/g, "\\$&")}%`;
+    countSql =
+      "SELECT count(*)::int AS total FROM users WHERE mess_id=$1 AND role='student' AND (name ILIKE $2 OR college_id ILIKE $2)";
+    countParams = [manager.messId, searchPattern];
+    querySql =
+      "SELECT u.*,COALESCE(sum(l.amount),0)::bigint AS balance FROM users u LEFT JOIN ledger_entries l ON l.user_id=u.id WHERE u.mess_id=$1 AND u.role='student' AND (u.name ILIKE $2 OR u.college_id ILIKE $2) GROUP BY u.id ORDER BY u.name LIMIT $3 OFFSET $4";
+    queryParams = [manager.messId, searchPattern, l, offset];
+  } else {
+    countSql =
+      "SELECT count(*)::int AS total FROM users WHERE mess_id=$1 AND role='student'";
+    countParams = [manager.messId];
+    querySql =
+      "SELECT u.*,COALESCE(sum(l.amount),0)::bigint AS balance FROM users u LEFT JOIN ledger_entries l ON l.user_id=u.id WHERE u.mess_id=$1 AND u.role='student' GROUP BY u.id ORDER BY u.name LIMIT $2 OFFSET $3";
+    queryParams = [manager.messId, l, offset];
+  }
+
+  const [countRes, rows] = await Promise.all([
+    query(countSql, countParams),
+    query(querySql, queryParams),
+  ]);
+
+  const total = Number(countRes[0]?.total ?? 0);
+  const totalPages = Math.ceil(total / l) || 1;
+
+  return {
+    students: rows.map((r) => ({
+      ...userFromRow(r),
+      balance: Number(r.balance),
+    })),
+    total,
+    page: p,
+    limit: l,
+    totalPages,
+  };
+}
+
+export async function createStudent(
+  manager: User,
+  input: z.infer<typeof createStudentSchema>,
+) {
+  const collegeId = input.collegeId.trim().toUpperCase();
+  const messId = input.messId || manager.messId;
+
+  const messRow = await query("SELECT id FROM messes WHERE id=$1", [messId]);
+  if (!messRow.length) {
+    throw new ApiError(400, "Assigned mess does not exist.");
+  }
+
+  const existing = await query("SELECT id FROM users WHERE college_id=$1", [
+    collegeId,
+  ]);
+  if (existing.length) {
+    throw new ApiError(409, "A student with this college ID already exists.");
+  }
+
+  const id = randomUUID();
+  const pinHash = await hashPin(input.pin);
+
+  await transaction(async (c) => {
+    await c.query(
+      "INSERT INTO users(id,college_id,name,role,mess_id,pin_hash,active,session_version) VALUES($1,$2,$3,'student',$4,$5,true,1)",
+      [id, collegeId, input.name.trim(), messId, pinHash],
+    );
+    await c.query(
+      "INSERT INTO audit_logs(id,mess_id,actor_id,action,detail) VALUES($1,$2,$3,$4,$5)",
+      [
+        randomUUID(),
+        manager.messId,
+        manager.id,
+        "student.created",
+        JSON.stringify({ studentId: id, collegeId, name: input.name.trim(), messId }),
+      ],
+    );
+  });
+
+  return {
+    ok: true,
+    user: {
+      id,
+      collegeId,
+      name: input.name.trim(),
+      role: "student" as const,
+      messId,
+      active: true,
+      balance: 0,
+    },
+  };
+}
+
+export async function resetStudentPin(
+  manager: User,
+  input: z.infer<typeof resetPinSchema>,
+) {
+  const student = (
+    await query(
+      "SELECT id,college_id FROM users WHERE id=$1 AND mess_id=$2 AND role='student'",
+      [input.userId, manager.messId],
+    )
+  )[0];
+  if (!student) throw new ApiError(404, "Student not found in this mess.");
+
+  const pinHash = await hashPin(input.pin);
+
+  await transaction(async (c) => {
+    await c.query(
+      "UPDATE users SET pin_hash=$1, session_version=session_version+1 WHERE id=$2",
+      [pinHash, input.userId],
+    );
+    await c.query(
+      "INSERT INTO audit_logs(id,mess_id,actor_id,action,detail) VALUES($1,$2,$3,$4,$5)",
+      [
+        randomUUID(),
+        manager.messId,
+        manager.id,
+        "student.pin-reset",
+        JSON.stringify({ studentId: input.userId, collegeId: student.college_id }),
+      ],
+    );
+  });
+
+  return { ok: true };
+}
+
+export async function updateStudentStatus(
+  manager: User,
+  input: z.infer<typeof updateStatusSchema>,
+) {
+  const student = (
+    await query(
+      "SELECT id,college_id,active FROM users WHERE id=$1 AND mess_id=$2 AND role='student'",
+      [input.userId, manager.messId],
+    )
+  )[0];
+  if (!student) throw new ApiError(404, "Student not found in this mess.");
+
+  await transaction(async (c) => {
+    await c.query(
+      "UPDATE users SET active=$1, session_version=CASE WHEN $1=false THEN session_version+1 ELSE session_version END WHERE id=$2",
+      [input.active, input.userId],
+    );
+    await c.query(
+      "INSERT INTO audit_logs(id,mess_id,actor_id,action,detail) VALUES($1,$2,$3,$4,$5)",
+      [
+        randomUUID(),
+        manager.messId,
+        manager.id,
+        "student.status-updated",
+        JSON.stringify({
+          studentId: input.userId,
+          collegeId: student.college_id,
+          active: input.active,
+        }),
+      ],
+    );
+  });
+
+  return { ok: true, active: input.active };
+}
+
+export async function bulkImportStudents(
+  manager: User,
+  input: z.infer<typeof bulkImportSchema>,
+) {
+  const messes = new Set(
+    (await query("SELECT id FROM messes")).map((r) => String(r.id)),
+  );
+
+  const seenIds = new Set<string>();
+  const validRows: {
+    collegeId: string;
+    name: string;
+    messId: string;
+    pin: string;
+  }[] = [];
+  const errors: { row: number; collegeId: string; reason: string }[] = [];
+
+  for (let i = 0; i < input.students.length; i++) {
+    const s = input.students[i];
+    const rowNum = i + 1;
+    const cid = s.collegeId.trim().toUpperCase();
+    const name = s.name.trim();
+    const messId = s.messId || manager.messId;
+
+    if (!cid) {
+      errors.push({ row: rowNum, collegeId: cid, reason: "College ID is required" });
+      continue;
+    }
+    if (seenIds.has(cid)) {
+      errors.push({ row: rowNum, collegeId: cid, reason: "Duplicate college ID in import batch" });
+      continue;
+    }
+    seenIds.add(cid);
+
+    if (!messes.has(messId)) {
+      errors.push({ row: rowNum, collegeId: cid, reason: `Unknown mess ID: ${messId}` });
+      continue;
+    }
+
+    const pin = input.defaultPin || String(randomInt(100000, 1000000));
+    validRows.push({ collegeId: cid, name, messId, pin });
+  }
+
+  if (validRows.length > 0) {
+    const existing = await query(
+      "SELECT college_id FROM users WHERE college_id = ANY($1)",
+      [validRows.map((r) => r.collegeId)],
+    );
+    const existingSet = new Set(existing.map((r) => String(r.college_id)));
+    for (let i = validRows.length - 1; i >= 0; i--) {
+      if (existingSet.has(validRows[i].collegeId)) {
+        errors.push({
+          row: 0,
+          collegeId: validRows[i].collegeId,
+          reason: "College ID already registered in system",
+        });
+        validRows.splice(i, 1);
+      }
+    }
+  }
+
+  const credentials: { collegeId: string; name: string; pin: string }[] = [];
+
+  if (validRows.length > 0) {
+    await transaction(async (c) => {
+      for (const row of validRows) {
+        const id = randomUUID();
+        const pinHash = await hashPin(row.pin);
+        await c.query(
+          "INSERT INTO users(id,college_id,name,role,mess_id,pin_hash,active,session_version) VALUES($1,$2,$3,'student',$4,$5,true,1)",
+          [id, row.collegeId, row.name, row.messId, pinHash],
+        );
+        credentials.push({ collegeId: row.collegeId, name: row.name, pin: row.pin });
+      }
+      await c.query(
+        "INSERT INTO audit_logs(id,mess_id,actor_id,action,detail) VALUES($1,$2,$3,$4,$5)",
+        [
+          randomUUID(),
+          manager.messId,
+          manager.id,
+          "student.bulk-imported",
+          JSON.stringify({
+            count: validRows.length,
+            errorCount: errors.length,
+            collegeIds: validRows.map((r) => r.collegeId),
+          }),
+        ],
+      );
+    });
+  }
+
+  return {
+    imported: validRows.length,
+    errors,
+    credentials,
+  };
+}
+
+export async function requestLeave(
+  student: User,
+  input: z.infer<typeof studentLeaveRequestSchema>,
+) {
+  const overlap = await query(
+    "SELECT id FROM leaves WHERE user_id=$1 AND status IN ('pending', 'approved') AND starts_on<=$3 AND ends_on>=$2",
+    [student.id, input.startsOn, input.endsOn],
+  );
+  if (overlap.length > 0) {
+    throw new ApiError(
+      409,
+      "You already have a pending or approved leave covering this period.",
+    );
+  }
+
+  const id = randomUUID();
+  const externalId = `req:${id}`;
+
+  await query(
+    "INSERT INTO leaves(id,external_id,user_id,starts_on,ends_on,status,source,reason) VALUES($1,$2,$3,$4,$5,'pending','student_request',$6)",
+    [id, externalId, student.id, input.startsOn, input.endsOn, input.reason ?? null],
+  );
+
+  return { ok: true, id };
+}
+
+export async function cancelLeave(
+  student: User,
+  input: z.infer<typeof cancelLeaveSchema>,
+) {
+  const row = (
+    await query("SELECT id,status FROM leaves WHERE id=$1 AND user_id=$2", [
+      input.leaveId,
+      student.id,
+    ])
+  )[0];
+  if (!row) throw new ApiError(404, "Leave request not found.");
+  if (row.status !== "pending") {
+    throw new ApiError(400, "Only pending leave requests can be cancelled.");
+  }
+
+  await query("UPDATE leaves SET status='cancelled', updated_at=now() WHERE id=$1", [
+    input.leaveId,
+  ]);
+
+  return { ok: true };
+}
+
+export async function reviewLeave(
+  manager: User,
+  input: z.infer<typeof reviewLeaveSchema>,
+) {
+  const leave = (
+    await query(
+      "SELECT l.id,l.user_id,u.mess_id FROM leaves l JOIN users u ON u.id=l.user_id WHERE l.id=$1 AND u.mess_id=$2 AND l.status='pending'",
+      [input.leaveId, manager.messId],
+    )
+  )[0];
+  if (!leave) {
+    throw new ApiError(404, "Pending leave request not found in your mess.");
+  }
+
+  await transaction(async (c) => {
+    await c.query("UPDATE leaves SET status=$1, updated_at=now() WHERE id=$2", [
+      input.status,
+      input.leaveId,
+    ]);
+    await c.query(
+      "INSERT INTO audit_logs(id,mess_id,actor_id,action,detail) VALUES($1,$2,$3,$4,$5)",
+      [
+        randomUUID(),
+        manager.messId,
+        manager.id,
+        `leave.${input.status}`,
+        JSON.stringify({ leaveId: input.leaveId, status: input.status, studentId: leave.user_id }),
+      ],
+    );
+  });
+
+  return { ok: true, status: input.status };
+}
+
+export async function manualLeave(
+  manager: User,
+  input: z.infer<typeof manualLeaveSchema>,
+) {
+  const student = (
+    await query(
+      "SELECT id,college_id FROM users WHERE id=$1 AND mess_id=$2 AND role='student'",
+      [input.userId, manager.messId],
+    )
+  )[0];
+  if (!student) throw new ApiError(404, "Student not found in your mess.");
+
+  const overlap = await query(
+    "SELECT id FROM leaves WHERE user_id=$1 AND status='approved' AND starts_on<=$3 AND ends_on>=$2",
+    [input.userId, input.startsOn, input.endsOn],
+  );
+  if (overlap.length > 0) {
+    throw new ApiError(
+      409,
+      "Student already has an approved leave covering this period.",
+    );
+  }
+
+  const id = randomUUID();
+  const externalId = `man:${id}`;
+
+  await transaction(async (c) => {
+    await c.query(
+      "INSERT INTO leaves(id,external_id,user_id,starts_on,ends_on,status,source,reason) VALUES($1,$2,$3,$4,$5,'approved','manager_manual',$6)",
+      [id, externalId, input.userId, input.startsOn, input.endsOn, input.reason],
+    );
+    await c.query(
+      "INSERT INTO audit_logs(id,mess_id,actor_id,action,detail) VALUES($1,$2,$3,$4,$5)",
+      [
+        randomUUID(),
+        manager.messId,
+        manager.id,
+        "leave.manual-approved",
+        JSON.stringify({
+          leaveId: id,
+          studentId: input.userId,
+          collegeId: student.college_id,
+          startsOn: input.startsOn,
+          endsOn: input.endsOn,
+          reason: input.reason,
+        }),
+      ],
+    );
+  });
+
+  return { ok: true, id };
 }
