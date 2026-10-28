@@ -270,3 +270,72 @@ test("Phase B Feature 4: Server-side pagination & bounded parameters", async () 
     ),
   );
 });
+
+test("Regression: studentOverview() leaves query uses qualified leaves.created_at to avoid PostgreSQL error 42702", async () => {
+  const originalUrl = process.env.DATABASE_URL;
+  process.env.DATABASE_URL = "postgres://mock:mock@127.0.0.1:5432/mock";
+  try {
+    const { getPool, closePool } = await import("../src/lib/db");
+    const { studentOverview } = await import("../src/lib/service");
+    const pool = getPool();
+    const executedQueries: { text: string; values?: unknown[] }[] = [];
+    const origQuery = pool.query.bind(pool);
+    pool.query = (async (text: string, values?: unknown[]) => {
+      executedQueries.push({ text, values });
+      if (text.includes("settings")) {
+        return {
+          rows: [
+            {
+              value: {
+                messName: "South Mess",
+                windows: {},
+                prices: {},
+                safetyBuffer: 0.05,
+                timeZone: "Asia/Kolkata",
+                configured: true,
+                leavePolicy: "flag",
+                addons: [],
+              },
+            },
+          ],
+        };
+      }
+      if (text.includes("balance")) {
+        return { rows: [{ balance: "0" }] };
+      }
+      return { rows: [] };
+    }) as typeof pool.query;
+
+    const mockStudent: User = {
+      id: "10000000-0000-4000-8000-000000000002",
+      collegeId: "REG001",
+      name: "Regression Test Student",
+      role: "student",
+      messId: "south-mess",
+      active: true,
+    };
+
+    await studentOverview(mockStudent);
+
+    const leavesQuery = executedQueries.find((q) =>
+      q.text.includes("FROM leaves"),
+    );
+    assert.ok(leavesQuery, "Leaves query should have been executed");
+    assert.match(
+      leavesQuery.text,
+      /ORDER BY leaves\.created_at DESC/,
+      "Query must qualify leaves.created_at to prevent ambiguous column error 42702",
+    );
+    assert.doesNotMatch(
+      leavesQuery.text,
+      /ORDER BY created_at DESC/,
+      "Query must not use unqualified created_at in ORDER BY",
+    );
+
+    pool.query = origQuery;
+    await closePool();
+  } finally {
+    if (originalUrl) process.env.DATABASE_URL = originalUrl;
+    else delete process.env.DATABASE_URL;
+  }
+});

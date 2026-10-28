@@ -80,7 +80,7 @@ export async function studentOverview(user: User): Promise<StudentOverview> {
       [user.id],
     ),
     query(
-      "SELECT *,starts_on::text,ends_on::text,created_at::text FROM leaves WHERE user_id=$1 ORDER BY created_at DESC LIMIT 40",
+      "SELECT *,starts_on::text,ends_on::text,created_at::text FROM leaves WHERE user_id=$1 ORDER BY leaves.created_at DESC LIMIT 40",
       [user.id],
     ),
     query(
