@@ -92,6 +92,7 @@ export type Forecast = {
   historyThrough?: string;
   modelVersion?: string;
   note?: string;
+  isSynthetic?: boolean;
 };
 export type PaginatedStudents = {
   students: (User & { balance: number })[];

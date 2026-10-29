@@ -11,6 +11,7 @@ import { getDb, query, transaction } from "./db";
 import { hashPin, secret, userFromRow } from "./auth";
 import { ApiError } from "./errors";
 import { demandForecasts } from "./forecast";
+import { loadSyntheticHistory } from "./synthetic-history";
 import {
   defaultSettings,
   emptyCounts,
@@ -246,7 +247,10 @@ export async function scanMeal(user: User, token: string): Promise<ScanResult> {
     };
   });
 }
-export async function managerOverview(user: User): Promise<ManagerOverview> {
+export async function managerOverview(
+  user: User,
+  forecastSource?: string | null,
+): Promise<ManagerOverview> {
   const config = await settings(user.messId);
   const today = localTime(new Date(), config.timeZone).date;
   const [
@@ -292,12 +296,30 @@ export async function managerOverview(user: User): Promise<ManagerOverview> {
       [user.messId],
     ),
   ]);
-  const history = historyRows as Usage[];
+  const useSynthetic =
+    forecastSource === "synthetic" ||
+    process.env.FORECAST_DEMO_DATA === "true";
+
+  let history = historyRows as Usage[];
+  if (useSynthetic) {
+    try {
+      const { history: syntheticHistory } = loadSyntheticHistory(today);
+      history = syntheticHistory;
+    } catch (e) {
+      console.warn("Could not load synthetic history:", e);
+    }
+  }
+
   const daily = emptyCounts(),
     prep = emptyCounts();
   counts.forEach((r) => (daily[r.meal as Meal] = r.count));
   prepared.forEach((r) => (prep[r.meal as Meal] = r.prepared));
-  const forecasts = await demandForecasts(history, today, config.safetyBuffer);
+  const forecasts = await demandForecasts(
+    history,
+    today,
+    config.safetyBuffer,
+    useSynthetic ? { isSynthetic: true } : undefined,
+  );
   return {
     settings: config,
     today,

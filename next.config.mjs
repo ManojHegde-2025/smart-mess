@@ -10,6 +10,9 @@ const securityHeaders = [
 export default {
   poweredByHeader: false,
   experimental: { cpus: 2 },
+  outputFileTracingIncludes: {
+    "/api/**/*": ["./services/ml/data/synthetic_meal_history.csv"],
+  },
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];
   },
