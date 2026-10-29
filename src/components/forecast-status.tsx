@@ -24,6 +24,20 @@ export function ForecastStatus({
       >
         {f.mlStatus ? labels[f.mlStatus] : "Rolling average"}
       </span>
+      {f.isSynthetic && (
+        <span
+          className="badge neutral synthetic-badge"
+          data-testid={`synthetic-badge-${f.meal}`}
+          style={{
+            marginLeft: "6px",
+            fontSize: "11px",
+            fontWeight: "600",
+            letterSpacing: "0.03em",
+          }}
+        >
+          DEMO DATA — SYNTHETIC FORECAST
+        </span>
+      )}
       {details && (
         <>
           <p className="small muted">

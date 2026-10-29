@@ -414,14 +414,46 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
     [api, page, pageSize, search],
   );
 
-  const load = useCallback(async () => {
-    try {
-      setData(await api<ManagerOverview>("/manager/overview"));
-      setError("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to load dashboard.");
+  const [forecastSource, setForecastSource] = useState<"live" | "synthetic">("live");
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const param = new URLSearchParams(window.location.search).get("forecastSource");
+      const stored = sessionStorage.getItem("smart_mess_forecast_source");
+      if (param === "synthetic" || stored === "synthetic") {
+        setForecastSource("synthetic");
+      }
     }
-  }, [api]);
+  }, []);
+
+  const load = useCallback(
+    async (source = forecastSource) => {
+      try {
+        const endpoint =
+          source === "synthetic"
+            ? "/manager/overview?forecastSource=synthetic"
+            : "/manager/overview";
+        setData(await api<ManagerOverview>(endpoint));
+        setError("");
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Unable to load dashboard.");
+      }
+    },
+    [api, forecastSource],
+  );
+
+  function toggleForecastSource() {
+    const next = forecastSource === "synthetic" ? "live" : "synthetic";
+    setForecastSource(next);
+    if (typeof window !== "undefined") {
+      if (next === "synthetic") {
+        sessionStorage.setItem("smart_mess_forecast_source", "synthetic");
+      } else {
+        sessionStorage.removeItem("smart_mess_forecast_source");
+      }
+    }
+    void load(next);
+  }
 
   useEffect(() => {
     if (ready && user?.role === "manager") {
@@ -788,7 +820,27 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
                       </span>
                       <h2>Tomorrow’s outlook</h2>
                     </div>
-                    <Sparkles size={22} />
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      {mode !== "demo" && (
+                        <button
+                          type="button"
+                          className={`badge ${forecastSource === "synthetic" ? "amber" : "neutral"}`}
+                          style={{
+                            cursor: "pointer",
+                            fontSize: "11px",
+                            padding: "3px 8px",
+                            border: "1px solid currentColor",
+                          }}
+                          onClick={toggleForecastSource}
+                          title="Toggle between live database attendance and the 120-day synthetic demonstration dataset"
+                        >
+                          {forecastSource === "synthetic"
+                            ? "Synthetic Demo (120d)"
+                            : "Test Synthetic Data"}
+                        </button>
+                      )}
+                      <Sparkles size={22} />
+                    </div>
                   </div>
                   <p>
                     Aggregate meal estimates, with a{" "}
@@ -811,13 +863,22 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
                   <div className="forecast-note">
                     <TrendingUp size={16} />
                     <span>
-                      {mode === "demo"
-                        ? "Based on synthetic demo history."
-                        : "Based on completed historical service days."}{" "}
+                      {data.forecasts.some((f) => f.isSynthetic)
+                        ? "DEMO DATA — SYNTHETIC FORECAST: Based on 120-day synthetic historical records."
+                        : mode === "demo"
+                          ? "Based on synthetic demo history."
+                          : "Based on completed historical service days."}{" "}
                       Estimates improve only when validation supports it.
                     </span>
                   </div>
-                  <Link className="ml-details-link" href="/manager/reports">
+                  <Link
+                    className="ml-details-link"
+                    href={
+                      forecastSource === "synthetic"
+                        ? "/manager/reports?forecastSource=synthetic"
+                        : "/manager/reports"
+                    }
+                  >
                     View model evaluation <ArrowRight size={15} />
                   </Link>
                 </section>
@@ -1442,9 +1503,29 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
           {view === "reports" && (
             <>
               <div className="panel ml-explainer">
-                <div>
-                  <span className="eyebrow">DEMAND PREDICTION</span>
-                  <h2>Learn from completed meal counts</h2>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "12px" }}>
+                  <div>
+                    <span className="eyebrow">DEMAND PREDICTION</span>
+                    <h2>Learn from completed meal counts</h2>
+                  </div>
+                  {mode !== "demo" && (
+                    <button
+                      type="button"
+                      className={`badge ${forecastSource === "synthetic" ? "amber" : "neutral"}`}
+                      style={{
+                        cursor: "pointer",
+                        fontSize: "11px",
+                        padding: "3px 8px",
+                        border: "1px solid currentColor",
+                      }}
+                      onClick={toggleForecastSource}
+                      title="Toggle between live database attendance and the 120-day synthetic demonstration dataset"
+                    >
+                      {forecastSource === "synthetic"
+                        ? "Synthetic Demo (120d)"
+                        : "Test Synthetic Data"}
+                    </button>
+                  )}
                 </div>
                 <p>
                   The model learns weekly patterns, recent attendance, and
@@ -1455,9 +1536,11 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
                 <p className="small muted">
                   MAE is the average error in meals; lower is better. Today’s
                   incomplete counts are excluded.{" "}
-                  {mode === "demo"
-                    ? "These results use synthetic demonstration data, not measured campus accuracy."
-                    : "New completed records trigger a fresh evaluation. Historical performance does not guarantee future results."}
+                  {data.forecasts.some((f) => f.isSynthetic)
+                    ? "DEMO DATA — SYNTHETIC FORECAST: These results use a 120-day synthetic dataset with modeled weekend and holiday patterns, not measured campus attendance."
+                    : mode === "demo"
+                      ? "These results use synthetic demonstration data, not measured campus accuracy."
+                      : "New completed records trigger a fresh evaluation. Historical performance does not guarantee future results."}
                 </p>
               </div>
               <div className="report-forecast-grid">

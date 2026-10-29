@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { addDays, isDate } from "./domain";
 import { MEALS, type Meal, type Usage } from "./types";
+import fallbackRecords from "./synthetic-data.json";
 
 export type SyntheticUsage = Usage & {
   isSynthetic: true;
@@ -42,30 +43,6 @@ export function loadSyntheticHistory(alignToDate?: string): {
   metadata: SyntheticHistoryMetadata;
 } {
   const csvPath = resolveCsvPath();
-  if (!existsSync(csvPath)) {
-    throw new Error(
-      `Synthetic historical dataset not found at ${csvPath}. Run python services/ml/data/generate_synthetic_data.py to generate it.`,
-    );
-  }
-
-  const content = readFileSync(csvPath, "utf-8");
-  const lines = content.trim().split("\n");
-  if (lines.length < 2) {
-    throw new Error("Synthetic dataset is empty or corrupted.");
-  }
-
-  const header = lines[0].split(",").map((h) => h.trim());
-  const dateIdx = header.indexOf("date");
-  const mealIdx = header.indexOf("meal");
-  const servedIdx = header.indexOf("served");
-  const preparedIdx = header.indexOf("prepared");
-  const leavesIdx = header.indexOf("approved_leaves");
-  const eventIdx = header.indexOf("event_flag");
-
-  if (dateIdx === -1 || mealIdx === -1 || servedIdx === -1 || preparedIdx === -1) {
-    throw new Error("Synthetic dataset header missing required columns.");
-  }
-
   const rawRows: {
     date: string;
     meal: Meal;
@@ -75,27 +52,60 @@ export function loadSyntheticHistory(alignToDate?: string): {
     eventFlag?: string;
   }[] = [];
 
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(",").map((c) => c.trim());
-    if (cols.length <= Math.max(dateIdx, mealIdx, servedIdx, preparedIdx)) continue;
+  if (existsSync(csvPath)) {
+    const content = readFileSync(csvPath, "utf-8");
+    const lines = content.trim().split("\n");
+    if (lines.length >= 2) {
+      const header = lines[0].split(",").map((h) => h.trim());
+      const dateIdx = header.indexOf("date");
+      const mealIdx = header.indexOf("meal");
+      const servedIdx = header.indexOf("served");
+      const preparedIdx = header.indexOf("prepared");
+      const leavesIdx = header.indexOf("approved_leaves");
+      const eventIdx = header.indexOf("event_flag");
 
-    const dateVal = cols[dateIdx];
-    const mealVal = cols[mealIdx] as Meal;
-    if (!isDate(dateVal) || !MEALS.includes(mealVal)) continue;
+      if (dateIdx !== -1 && mealIdx !== -1 && servedIdx !== -1 && preparedIdx !== -1) {
+        for (let i = 1; i < lines.length; i++) {
+          const cols = lines[i].split(",").map((c) => c.trim());
+          if (cols.length <= Math.max(dateIdx, mealIdx, servedIdx, preparedIdx)) continue;
 
-    const served = parseInt(cols[servedIdx], 10);
-    const prepared = parseInt(cols[preparedIdx], 10);
-    const leaves = leavesIdx !== -1 ? parseInt(cols[leavesIdx], 10) : undefined;
-    const event = eventIdx !== -1 ? cols[eventIdx] : undefined;
+          const dateVal = cols[dateIdx];
+          const mealVal = cols[mealIdx] as Meal;
+          if (!isDate(dateVal) || !MEALS.includes(mealVal)) continue;
 
-    rawRows.push({
-      date: dateVal,
-      meal: mealVal,
-      served: isNaN(served) ? 0 : Math.max(0, served),
-      prepared: isNaN(prepared) ? 0 : Math.max(0, prepared),
-      approvedLeaves: isNaN(leaves ?? NaN) ? undefined : leaves,
-      eventFlag: event,
-    });
+          const served = parseInt(cols[servedIdx], 10);
+          const prepared = parseInt(cols[preparedIdx], 10);
+          const leaves = leavesIdx !== -1 ? parseInt(cols[leavesIdx], 10) : undefined;
+          const event = eventIdx !== -1 ? cols[eventIdx] : undefined;
+
+          rawRows.push({
+            date: dateVal,
+            meal: mealVal,
+            served: isNaN(served) ? 0 : Math.max(0, served),
+            prepared: isNaN(prepared) ? 0 : Math.max(0, prepared),
+            approvedLeaves: isNaN(leaves ?? NaN) ? undefined : leaves,
+            eventFlag: event,
+          });
+        }
+      }
+    }
+  }
+
+  // If CSV was not readable from disk, use the pre-bundled JSON fallback
+  if (rawRows.length === 0) {
+    for (const r of fallbackRecords as Record<string, unknown>[]) {
+      const dateVal = String(r.date);
+      const mealVal = String(r.meal) as Meal;
+      if (!isDate(dateVal) || !MEALS.includes(mealVal)) continue;
+      rawRows.push({
+        date: dateVal,
+        meal: mealVal,
+        served: Number(r.served) || 0,
+        prepared: Number(r.prepared) || 0,
+        approvedLeaves: r.approved_leaves ? Number(r.approved_leaves) : undefined,
+        eventFlag: r.event_flag ? String(r.event_flag) : undefined,
+      });
+    }
   }
 
   // Sort raw rows by date ascending, then meal

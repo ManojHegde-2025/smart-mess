@@ -132,3 +132,10 @@ test("Data Isolation: live database queries are untouched when synthetic mode is
     else delete process.env.DATABASE_URL;
   }
 });
+
+test("Synthetic History: bundled fallback dataset is available and valid", async () => {
+  const fallbackModule = await import("../src/lib/synthetic-data.json");
+  const records = (fallbackModule.default || fallbackModule) as Array<Record<string, unknown>>;
+  assert.equal(records.length, 360);
+  assert.equal(new Set(records.map((r) => r.date)).size, 120);
+});

@@ -301,12 +301,20 @@ export async function managerOverview(
     process.env.FORECAST_DEMO_DATA === "true";
 
   let history = historyRows as Usage[];
+  let isSynthetic = false;
   if (useSynthetic) {
     try {
       const { history: syntheticHistory } = loadSyntheticHistory(today);
       history = syntheticHistory;
+      isSynthetic = true;
     } catch (e) {
-      console.warn("Could not load synthetic history:", e);
+      console.error("Could not load synthetic history:", e);
+      if (forecastSource === "synthetic") {
+        throw new ApiError(
+          503,
+          "Synthetic demonstration dataset could not be loaded.",
+        );
+      }
     }
   }
 
@@ -318,7 +326,7 @@ export async function managerOverview(
     history,
     today,
     config.safetyBuffer,
-    useSynthetic ? { isSynthetic: true } : undefined,
+    isSynthetic ? { isSynthetic: true } : undefined,
   );
   return {
     settings: config,

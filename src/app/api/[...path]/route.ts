@@ -151,8 +151,10 @@ async function handler(request: NextRequest) {
       );
     }
     requireRole(user, "manager");
-    if (path === "/manager/overview" && method === "GET")
-      return json(await service.managerOverview(user));
+    if (path === "/manager/overview" && method === "GET") {
+      const forecastSource = request.nextUrl.searchParams.get("forecastSource");
+      return json(await service.managerOverview(user, forecastSource));
+    }
     if (path === "/manager/students" && method === "GET") {
       const params = paginationSchema.parse({
         page: request.nextUrl.searchParams.get("page") ?? 1,
@@ -238,7 +240,8 @@ async function handler(request: NextRequest) {
         await service.adjustLedger(user, ledgerSchema.parse(await body())),
       );
     if (path === "/reports/daily" && method === "GET") {
-      const data = await service.managerOverview(user);
+      const forecastSource = request.nextUrl.searchParams.get("forecastSource");
+      const data = await service.managerOverview(user, forecastSource);
       return new NextResponse(reportCsv(data.history), {
         headers: {
           "content-type": "text/csv; charset=utf-8",
