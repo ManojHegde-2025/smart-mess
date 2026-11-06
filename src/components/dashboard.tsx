@@ -303,28 +303,11 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
     setAiBusy(true);
     setAiError("");
     try {
-      const payload = {
-        messName: data.settings.messName,
-        date: data.today,
-        forecasts: data.forecasts.map((f) => ({
-          meal: f.meal,
-          predicted: f.predicted,
-          prepare: f.prepare,
-          method: f.method,
-          mae: f.mae,
-          status: f.mlStatus,
-        })),
-        counts: data.counts,
-        prepared: data.prepared,
-        leaveCount: data.leaveCount,
-        exceptionCount: data.exceptions.length,
-        recentUsage: data.history.slice(-21),
-      };
       const endpoint = mode === "demo" ? "/api/demo/ai-insights" : "/api/manager/ai-insights";
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({}),
         cache: "no-store",
         credentials: "same-origin",
         signal: AbortSignal.timeout(25_000),
@@ -578,11 +561,11 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
                 <div className="ai-insights-header">
                   <div>
                     <span className="eyebrow">GENERATIVE AI INTELLIGENCE LAYER</span>
-                    <h2>Smart Mess AI Insights</h2>
+                    <h2>AI Mess Intelligence</h2>
                     <p>
-                      XGBoost supplies the numerical demand forecast. Generative AI
-                      explains the forecast, analyzes waste and turns the operational
-                      data into manager-ready recommendations.
+                      XGBoost supplies the numerical demand forecast. Google Gemini explains
+                      the forecast, analyzes waste trends, and provides manager-ready operational
+                      recommendations.
                     </p>
                   </div>
                   <button
@@ -591,7 +574,7 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
                     disabled={aiBusy}
                   >
                     <Sparkles size={17} />
-                    {aiBusy ? "Generating…" : aiInsights ? "Refresh AI insights" : "Generate AI insights"}
+                    {aiBusy ? "Analyzing with Gemini…" : aiInsights ? "Refresh AI insights" : "Generate AI insights"}
                   </button>
                 </div>
                 {aiError && <div className="alert error">{aiError}</div>}
@@ -604,28 +587,38 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
                 {aiInsights && (
                   <div className="ai-insights-grid">
                     <div className="ai-insight-card featured">
-                      <span>AI summary</span>
+                      <span>Executive Summary</span>
                       <strong>{aiInsights.summary}</strong>
                     </div>
                     <div className="ai-insight-card">
-                      <span>Demand analysis</span>
+                      <span>Demand Analysis</span>
                       <p>{aiInsights.demandAnalysis}</p>
                     </div>
                     <div className="ai-insight-card">
-                      <span>Waste analysis</span>
+                      <span>Food Waste Analysis</span>
                       <p>{aiInsights.wasteAnalysis}</p>
                     </div>
                     <div className="ai-insight-card recommendation">
-                      <span>Recommended action</span>
+                      <span>Operational Recommendation</span>
                       <p>{aiInsights.recommendation}</p>
                     </div>
                     {aiInsights.alerts.length > 0 && (
                       <div className="ai-insight-card alerts">
-                        <span>Alerts</span>
-                        <ul>
-                          {aiInsights.alerts.map((alert) => (
-                            <li key={alert}>{alert}</li>
-                          ))}
+                        <span>Operational Alerts ({aiInsights.alerts.length})</span>
+                        <ul className="ai-alerts-list">
+                          {aiInsights.alerts.map((alert, idx) => {
+                            const isCritical = /critical|urgent|severe|shortage/i.test(alert);
+                            const isWarning = /warning|caution|over-preparation|waste|spike|drop/i.test(alert);
+                            const badgeClass = isCritical ? "critical" : isWarning ? "warning" : "info";
+                            const badgeText = isCritical ? "Critical" : isWarning ? "Warning" : "Info";
+                            const cleanText = alert.replace(/^\[(CRITICAL|WARNING|INFO)\]\s*/i, "");
+                            return (
+                              <li key={idx} className="ai-alert-item">
+                                <span className={`ai-alert-badge ${badgeClass}`}>{badgeText}</span>
+                                <span>{cleanText}</span>
+                              </li>
+                            );
+                          })}
                         </ul>
                       </div>
                     )}

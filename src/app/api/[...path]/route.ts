@@ -19,10 +19,14 @@ import {
   settingsSchema,
   usageSchema,
 } from "@/lib/validation";
-import { localTime, reportCsv } from "@/lib/domain";
+import { defaultSettings, localTime, reportCsv } from "@/lib/domain";
 import { demoHistory } from "@/lib/demo-history";
 import { demandForecasts } from "@/lib/forecast";
-import { generateMessInsights, insightInputSchema } from "@/lib/genai";
+import {
+  generateMessInsights,
+  insightInputSchema,
+  type InsightInput,
+} from "@/lib/genai";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 export const dynamic = "force-dynamic";
@@ -59,6 +63,25 @@ function checkDemoAiRateLimit(request: NextRequest) {
     record.count++;
   }
 }
+const managerAiRateLimit = new Map<string, { count: number; windowStart: number }>();
+function checkManagerAiRateLimit(userId: string) {
+  const now = Date.now();
+  const windowMs = 60 * 1000;
+  const maxRequests = 6;
+  const record = managerAiRateLimit.get(userId);
+  if (!record || now - record.windowStart > windowMs) {
+    managerAiRateLimit.set(userId, { count: 1, windowStart: now });
+  } else {
+    if (record.count >= maxRequests) {
+      throw new ApiError(
+        429,
+        "Too many AI insight requests. Please wait a moment before refreshing.",
+        "RATE_LIMITED",
+      );
+    }
+    record.count++;
+  }
+}
 async function handler(request: NextRequest) {
   try {
     const path = new URL(request.url).pathname.replace(/^\/api/, "");
@@ -73,7 +96,42 @@ async function handler(request: NextRequest) {
     if (appMode() === "demo" && path === "/demo/ai-insights" && method === "POST") {
       checkOrigin(request);
       checkDemoAiRateLimit(request);
-      const input = insightInputSchema.parse(JSON.parse(await readBody(request)));
+      const raw = await readBody(request);
+      let input: InsightInput;
+      let parsed: any = null;
+      try {
+        parsed = raw && raw.trim() !== "" ? JSON.parse(raw) : null;
+      } catch {}
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        parsed.messName &&
+        Array.isArray(parsed.forecasts)
+      ) {
+        input = insightInputSchema.parse(parsed);
+      } else {
+        const today = localTime().date;
+        const config = defaultSettings();
+        const history = demoHistory(today);
+        const forecasts = await demandForecasts(history, today, config.safetyBuffer);
+        input = {
+          messName: config.messName,
+          date: today,
+          forecasts: forecasts.map((f) => ({
+            meal: f.meal,
+            predicted: f.predicted,
+            prepare: f.prepare,
+            method: f.method,
+            mae: f.mae,
+            status: f.mlStatus,
+          })),
+          counts: { breakfast: 24, lunch: 29, dinner: 27 },
+          prepared: { breakfast: 25, lunch: 31, dinner: 28 },
+          leaveCount: 4,
+          exceptionCount: 1,
+          recentUsage: history.slice(-21),
+        };
+      }
       return json(await generateMessInsights(input));
     }
     if (
@@ -153,7 +211,40 @@ async function handler(request: NextRequest) {
     }
     requireRole(user, "manager");
     if (path === "/manager/ai-insights" && method === "POST") {
-      const input = insightInputSchema.parse(await body());
+      checkManagerAiRateLimit(user.id);
+      const raw = await readBody(request);
+      let input: InsightInput;
+      let parsed: any = null;
+      try {
+        parsed = raw && raw.trim() !== "" ? JSON.parse(raw) : null;
+      } catch {}
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        parsed.messName &&
+        Array.isArray(parsed.forecasts)
+      ) {
+        input = insightInputSchema.parse(parsed);
+      } else {
+        const overview = await service.managerOverview(user);
+        input = {
+          messName: overview.settings.messName,
+          date: overview.today,
+          forecasts: overview.forecasts.map((f) => ({
+            meal: f.meal,
+            predicted: f.predicted,
+            prepare: f.prepare,
+            method: f.method,
+            mae: f.mae,
+            status: f.mlStatus,
+          })),
+          counts: overview.counts,
+          prepared: overview.prepared,
+          leaveCount: overview.leaveCount,
+          exceptionCount: overview.exceptions.length,
+          recentUsage: overview.history.slice(-21),
+        };
+      }
       return json(await generateMessInsights(input));
     }
     if (path === "/manager/overview" && method === "GET")

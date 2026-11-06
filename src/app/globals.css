@@ -2516,6 +2516,48 @@ td strong {
 .ai-insight-card li + li {
   margin-top: 5px;
 }
+.ai-alerts-list {
+  list-style: none !important;
+  padding-left: 0 !important;
+  margin: 0 !important;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ai-alert-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #f5faf8;
+}
+.ai-alert-badge {
+  display: inline-block !important;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 9px !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.5px !important;
+  text-transform: uppercase !important;
+  margin-bottom: 0 !important;
+  flex-shrink: 0;
+}
+.ai-alert-badge.critical {
+  background: #ff4d4f2b;
+  color: #ff7875 !important;
+  border: 1px solid #ff4d4f66;
+}
+.ai-alert-badge.warning {
+  background: #faad142b;
+  color: #ffc53d !important;
+  border: 1px solid #faad1466;
+}
+.ai-alert-badge.info {
+  background: #1890ff2b;
+  color: #69c0ff !important;
+  border: 1px solid #1890ff66;
+}
 @media (max-width: 760px) {
   .ai-insights-header {
     flex-direction: column;
