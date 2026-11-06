@@ -2177,6 +2177,9 @@ td strong {
   .environment-pill {
     font-size: 8px;
   }
+  .pill-detail {
+    display: none;
+  }
   .topbar-right {
     gap: 10px;
   }

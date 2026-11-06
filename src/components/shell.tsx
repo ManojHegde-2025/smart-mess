@@ -164,7 +164,10 @@ export function Shell({
           <div className="topbar-right">
             <span className={`environment-pill ${mode === "demo" ? "demo-pill" : "live-pill"}`}>
               <ShieldCheck size={14} />
-              {mode === "demo" ? "DEMO MODE · Synthetic Data (84 Days)" : "LIVE MODE · Production Data"}
+              <span>{mode === "demo" ? "DEMO MODE" : "LIVE MODE"}</span>
+              <span className="pill-detail">
+                {mode === "demo" ? " · Synthetic (84d)" : " · Production"}
+              </span>
             </span>
             <span className="mini-avatar">{user.name[0]}</span>
           </div>
