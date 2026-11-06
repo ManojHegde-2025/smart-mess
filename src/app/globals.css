@@ -559,6 +559,50 @@ td strong {
   font-weight: 600;
   letter-spacing: 0.02em;
 }
+.mode-switcher {
+  display: inline-flex;
+  align-items: center;
+  background: #edf3ef;
+  border: 1px solid #d0ded4;
+  border-radius: 9999px;
+  padding: 2px;
+  gap: 2px;
+}
+.mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  border: none;
+  background: transparent;
+  color: #6d7c73;
+  font-size: 11px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.mode-btn:hover {
+  color: #12634f;
+}
+.mode-btn.active.live {
+  background: #12634f;
+  color: #ffffff;
+  font-weight: 650;
+  box-shadow: 0 1px 3px rgba(18, 99, 79, 0.2);
+}
+.mode-btn.active.live .status-dot {
+  background: #34d399;
+}
+.mode-btn.active.demo {
+  background: #d97706;
+  color: #ffffff;
+  font-weight: 650;
+  box-shadow: 0 1px 3px rgba(217, 119, 6, 0.2);
+}
+.mode-btn.active.demo .status-dot {
+  background: #fde68a;
+}
 .status-dot.demo {
   background: #d97706;
 }
@@ -2177,6 +2221,10 @@ td strong {
   .environment-pill {
     font-size: 8px;
   }
+  .mode-btn {
+    padding: 2px 7px;
+    font-size: 10px;
+  }
   .pill-detail {
     display: none;
   }
@@ -2337,6 +2385,9 @@ td strong {
   .scan-hero {
     padding: 26px;
     min-height: 265px;
+  }
+  .orbit {
+    display: none;
   }
   .scan-hero-content {
     max-width: 62%;

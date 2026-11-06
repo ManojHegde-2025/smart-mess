@@ -12,6 +12,7 @@ import { demoRequest, resetDemo } from "@/lib/demo";
 import type { Forecast, ManagerOverview, User } from "@/lib/types";
 type Context = {
   mode: "demo" | "live";
+  setMode: (mode: "demo" | "live") => Promise<void>;
   user: User | null;
   ready: boolean;
   api: <T>(
@@ -25,7 +26,7 @@ type Context = {
 };
 const AppContext = createContext<Context | null>(null);
 export function Provider({
-  mode,
+  mode: initialMode,
   children,
 }: {
   mode: "demo" | "live";
@@ -33,14 +34,36 @@ export function Provider({
 }) {
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
+  const [mode, setModeState] = useState<"demo" | "live">(initialMode);
   const router = useRouter();
+
+  const setMode = useCallback(
+    async (newMode: "demo" | "live") => {
+      if (!user || user.role !== "manager") return;
+      try {
+        await fetch("/api/manager/mode", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ mode: newMode }),
+          credentials: "same-origin",
+        });
+      } catch {}
+      setModeState(newMode);
+    },
+    [user],
+  );
+
   const api = useCallback(
     async <T,>(
       path: string,
       method = "GET",
       body?: Record<string, unknown>,
     ): Promise<T> => {
-      if (mode === "demo") {
+      if (
+        mode === "demo" &&
+        path !== "/manager/mode" &&
+        !path.startsWith("/api/demo/")
+      ) {
         const result = await demoRequest<T>(path, method, body);
         if (path === "/manager/overview") {
           const overview = result as ManagerOverview;
@@ -49,6 +72,7 @@ export function Provider({
               `/api/demo/forecasts?buffer=${overview.settings.safetyBuffer}`,
               {
                 cache: "no-store",
+                credentials: "same-origin",
                 signal: AbortSignal.timeout(15_000),
               },
             );
@@ -84,9 +108,15 @@ export function Provider({
   );
   useEffect(() => {
     let active = true;
-    api<{ user: User | null }>("/session")
-      .then((r) => {
-        if (active) setUser(r.user);
+    fetch("/api/session", { credentials: "same-origin", cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : { user: null, mode: "live" }))
+      .then((r: { user: User | null; mode?: "demo" | "live" }) => {
+        if (active) {
+          setUser(r.user);
+          if (r.mode && r.user?.role === "manager") {
+            setModeState(r.mode);
+          }
+        }
       })
       .catch(() => {})
       .finally(() => {
@@ -95,25 +125,34 @@ export function Provider({
     return () => {
       active = false;
     };
-  }, [api]);
+  }, []);
   const signIn = async (body: Record<string, unknown>) => {
-    const { user } = await api<{ user: User }>("/auth/login", "POST", body);
+    const { user, mode: loginMode } = await api<{
+      user: User;
+      mode?: "demo" | "live";
+    }>("/auth/login", "POST", body);
     setUser(user);
+    setModeState(loginMode ?? (initialMode === "demo" ? "demo" : "live"));
     router.push(user.role === "manager" ? "/manager" : "/student");
   };
   const signOut = async () => {
     await api("/auth/logout", "POST");
     setUser(null);
+    setModeState(initialMode === "demo" ? "demo" : "live");
     router.push("/login");
   };
   const reset = () => {
     resetDemo();
-    setUser(null);
-    router.push("/login");
+    if (initialMode === "demo") {
+      setUser(null);
+      router.push("/login");
+    } else {
+      void setMode("demo");
+    }
   };
   return (
     <AppContext.Provider
-      value={{ mode, user, ready, api, signIn, signOut, reset }}
+      value={{ mode, setMode, user, ready, api, signIn, signOut, reset }}
     >
       {children}
     </AppContext.Provider>

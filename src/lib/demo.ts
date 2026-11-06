@@ -177,13 +177,13 @@ export async function demoRequest<T>(
       actor: s.user?.name ?? "Demo",
       createdAt: new Date().toISOString(),
     });
-  if (path === "/session") return { user: s.user } as T;
+  if (path === "/session") return { user: s.user, mode: "demo" } as T;
   if (path === "/auth/login") {
     s.user = s.users.find(
       (u) => u.id === (body.role === "manager" ? managerId : studentId),
     )!;
     save(s);
-    return { user: s.user } as T;
+    return { user: s.user, mode: "demo" } as T;
   }
   if (path === "/auth/logout") {
     s.user = null;

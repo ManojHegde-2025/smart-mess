@@ -28,7 +28,7 @@ export function Shell({
   children: ReactNode;
   role?: Role;
 }) {
-  const { user, ready, mode, signOut, reset } = useApp();
+  const { user, ready, mode, setMode, signOut, reset } = useApp();
   const router = useRouter();
   const path = usePathname();
   const [open, setOpen] = useState(false);
@@ -162,10 +162,39 @@ export function Shell({
             </strong>
           </div>
           <div className="topbar-right">
-            <span className={`environment-pill ${mode === "demo" ? "demo-pill" : "live-pill"}`}>
-              <ShieldCheck size={14} />
-              {mode === "demo" ? "Demo mode" : "Live mode"}
-            </span>
+            {user?.role === "manager" ? (
+              <div
+                className="mode-switcher"
+                role="group"
+                aria-label="Data mode selector"
+              >
+                <button
+                  type="button"
+                  className={`mode-btn ${mode === "live" ? "active live" : ""}`}
+                  onClick={() => void setMode("live")}
+                  title="Switch to Live Production Data"
+                >
+                  <span className="status-dot live" />
+                  Live
+                </button>
+                <button
+                  type="button"
+                  className={`mode-btn ${mode === "demo" ? "active demo" : ""}`}
+                  onClick={() => void setMode("demo")}
+                  title="Switch to 84-Day Synthetic Demo Fixture"
+                >
+                  <span className="status-dot demo" />
+                  Demo
+                </button>
+              </div>
+            ) : (
+              <span
+                className={`environment-pill ${mode === "demo" ? "demo-pill" : "live-pill"}`}
+              >
+                <ShieldCheck size={14} />
+                {mode === "demo" ? "Demo mode" : "Live mode"}
+              </span>
+            )}
             <span className="mini-avatar">{user.name[0]}</span>
           </div>
         </header>

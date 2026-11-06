@@ -7,6 +7,8 @@ import {
   login,
   requireRole,
   SESSION_COOKIE,
+  MODE_COOKIE,
+  getSessionMode,
 } from "@/lib/auth";
 import { ApiError } from "@/lib/errors";
 import * as service from "@/lib/service";
@@ -92,8 +94,12 @@ async function handler(request: NextRequest) {
           ? { status: "ok", mode: "demo" }
           : { ...(await service.databaseHealth()), mode: "live" },
       );
-    // Public only in demo mode with strict validation, rate limiting, and origin check.
-    if (appMode() === "demo" && path === "/demo/ai-insights" && method === "POST") {
+    // Available in standalone demo mode or to authenticated managers in live mode
+    if (path === "/demo/ai-insights" && method === "POST") {
+      if (appMode() !== "demo") {
+        const user = await actor(request);
+        requireRole(user, "manager");
+      }
       checkOrigin(request);
       checkDemoAiRateLimit(request);
       const raw = await readBody(request);
@@ -134,11 +140,11 @@ async function handler(request: NextRequest) {
       }
       return json(await generateMessInsights(input));
     }
-    if (
-      appMode() === "demo" &&
-      path === "/demo/forecasts" &&
-      method === "GET"
-    ) {
+    if (path === "/demo/forecasts" && method === "GET") {
+      if (appMode() !== "demo") {
+        const user = await actor(request);
+        requireRole(user, "manager");
+      }
       const buffer = z.coerce
         .number()
         .min(0)
@@ -170,9 +176,16 @@ async function handler(request: NextRequest) {
     if (path === "/auth/login" && method === "POST") {
       const input = loginSchema.parse(await body());
       const result = await login(input.collegeId, input.pin);
-      const response = json({ user: result.user });
+      const response = json({ user: result.user, mode: "live" });
       response.cookies.set(SESSION_COOKIE, result.token, {
         httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        path: "/",
+        maxAge: 8 * 60 * 60,
+      });
+      response.cookies.set(MODE_COOKIE, "live", {
+        httpOnly: false,
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
         path: "/",
@@ -189,22 +202,60 @@ async function handler(request: NextRequest) {
         path: "/",
         maxAge: 0,
       });
+      response.cookies.set(MODE_COOKIE, "", {
+        httpOnly: false,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        path: "/",
+        maxAge: 0,
+      });
       return response;
     }
     const user = await actor(request);
-    if (path === "/session" && method === "GET") return json({ user });
+    const sessionMode = getSessionMode(request, user);
+    if (path === "/session" && method === "GET")
+      return json({ user, mode: sessionMode });
+    if (path === "/manager/mode" && method === "POST") {
+      requireRole(user, "manager");
+      const input = z
+        .object({ mode: z.enum(["live", "demo"]) })
+        .parse(await body());
+      const response = json({ ok: true, mode: input.mode });
+      response.cookies.set(MODE_COOKIE, input.mode, {
+        httpOnly: false,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        path: "/",
+        maxAge: 8 * 60 * 60,
+      });
+      return response;
+    }
     if (path === "/student/overview" && method === "GET") {
       requireRole(user, "student");
       return json(await service.studentOverview(user));
     }
     if (path === "/meals/scan" && method === "POST") {
       requireRole(user, "student");
+      if (sessionMode === "demo") {
+        throw new ApiError(
+          409,
+          "Demo mode is active. Database mutation blocked to protect production records.",
+          "DEMO_MUTATION_BLOCKED",
+        );
+      }
       return json(
         await service.scanMeal(user, scanSchema.parse(await body()).token),
       );
     }
     if (path === "/addons" && method === "POST") {
       requireRole(user, "student");
+      if (sessionMode === "demo") {
+        throw new ApiError(
+          409,
+          "Demo mode is active. Database mutation blocked to protect production records.",
+          "DEMO_MUTATION_BLOCKED",
+        );
+      }
       return json(
         await service.orderAddon(user, addonSchema.parse(await body())),
       );
@@ -243,18 +294,42 @@ async function handler(request: NextRequest) {
           mealSchema.parse(request.nextUrl.searchParams.get("meal")),
         ),
       );
-    if (path === "/manager/settings" && method === "PATCH")
+    if (path === "/manager/settings" && method === "PATCH") {
+      if (sessionMode === "demo") {
+        throw new ApiError(
+          409,
+          "Demo mode is active. Database mutation blocked to protect production records.",
+          "DEMO_MUTATION_BLOCKED",
+        );
+      }
       return json(
         await service.saveSettings(user, settingsSchema.parse(await body())),
       );
-    if (path === "/manager/usage" && method === "POST")
+    }
+    if (path === "/manager/usage" && method === "POST") {
+      if (sessionMode === "demo") {
+        throw new ApiError(
+          409,
+          "Demo mode is active. Database mutation blocked to protect production records.",
+          "DEMO_MUTATION_BLOCKED",
+        );
+      }
       return json(
         await service.saveUsage(user, usageSchema.parse(await body())),
       );
-    if (path === "/manager/ledger" && method === "POST")
+    }
+    if (path === "/manager/ledger" && method === "POST") {
+      if (sessionMode === "demo") {
+        throw new ApiError(
+          409,
+          "Demo mode is active. Database mutation blocked to protect production records.",
+          "DEMO_MUTATION_BLOCKED",
+        );
+      }
       return json(
         await service.adjustLedger(user, ledgerSchema.parse(await body())),
       );
+    }
     if (path === "/reports/daily" && method === "GET") {
       const data = await service.managerOverview(user);
       return new NextResponse(reportCsv(data.history), {

@@ -283,6 +283,11 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
   } | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState("");
+  useEffect(() => {
+    setData(null);
+    setAiInsights(null);
+    setAiError("");
+  }, [mode]);
   const load = useCallback(async () => {
     try {
       setData(await api<ManagerOverview>("/manager/overview"));

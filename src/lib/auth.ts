@@ -12,11 +12,24 @@ import { ApiError } from "./errors";
 import type { Role, User } from "./types";
 const scrypt = promisify(scryptCallback);
 export const SESSION_COOKIE = "smart_mess_session";
+export const MODE_COOKIE = "smart_mess_mode";
 export function appMode(): "demo" | "live" {
   const mode = process.env.APP_MODE ?? "demo";
   if (mode !== "demo" && mode !== "live")
     throw new Error("APP_MODE must be demo or live");
   return mode;
+}
+export function getSessionMode(
+  request: NextRequest,
+  user?: User | null,
+): "live" | "demo" {
+  if (process.env.APP_MODE === "demo") return "demo";
+  if (user && user.role !== "manager") return "live";
+  const cookieValue = request.cookies.get(MODE_COOKIE)?.value;
+  if (cookieValue === "demo" && (!user || user.role === "manager")) {
+    return "demo";
+  }
+  return "live";
 }
 export function secret(
   name: "SESSION_SECRET" | "QR_SECRET" | "WARDEN_WEBHOOK_SECRET",
