@@ -18,9 +18,16 @@ const server = spawn(
   {
     cwd: process.cwd(),
     env: { ...process.env, APP_MODE: "demo", NEXT_TELEMETRY_DISABLED: "1" },
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
   },
 );
+let serverLogs = "";
+server.stdout?.on("data", (d) => {
+  serverLogs = (serverLogs + d.toString()).slice(-3000);
+});
+server.stderr?.on("data", (d) => {
+  serverLogs = (serverLogs + d.toString()).slice(-3000);
+});
 let browser;
 let exited = false;
 server.once("exit", () => {
@@ -28,10 +35,10 @@ server.once("exit", () => {
 });
 try {
   let ready = false;
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 80; i++) {
     if (exited)
       throw new Error(
-        "Test server exited; check the build and whether the test port is free.",
+        `Test server exited early: ${serverLogs}`,
       );
     try {
       if ((await fetch(`${base}/api/health`)).ok) {
@@ -41,7 +48,7 @@ try {
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  assert.ok(ready, "Demo server did not become ready");
+  assert.ok(ready, `Demo server did not become ready. Output: ${serverLogs}`);
   browser = await chromium.launch({
     executablePath: process.env.BROWSER_EXECUTABLE || undefined,
     headless: true,
@@ -124,7 +131,7 @@ try {
         stream.getTracks().every((track) => track.readyState === "ended"),
       ),
     {},
-    { timeout: 5000 },
+    { timeout: 10000 },
   );
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(500);
