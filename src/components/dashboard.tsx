@@ -706,12 +706,12 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
                             >
                               <stop
                                 offset="0%"
-                                stopColor="#14856d"
-                                stopOpacity={0.2}
+                                stopColor="#FF4B1F"
+                                stopOpacity={0.35}
                               />
                               <stop
                                 offset="100%"
-                                stopColor="#14856d"
+                                stopColor="#FF4B1F"
                                 stopOpacity={0}
                               />
                             </linearGradient>
@@ -719,30 +719,35 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
                           <CartesianGrid
                             strokeDasharray="4 4"
                             vertical={false}
-                            stroke="#e9edec"
+                            stroke="rgba(255, 255, 255, 0.08)"
                           />
                           <XAxis
                             dataKey="date"
                             axisLine={false}
                             tickLine={false}
-                            tick={{ fill: "#7b8985", fontSize: 11 }}
+                            tick={{ fill: "#A7A29F", fontSize: 11 }}
                           />
                           <YAxis
                             axisLine={false}
                             tickLine={false}
-                            tick={{ fill: "#7b8985", fontSize: 11 }}
+                            tick={{ fill: "#A7A29F", fontSize: 11 }}
                           />
                           <Tooltip
                             contentStyle={{
-                              borderRadius: 12,
-                              border: "1px solid #e5ebe7",
+                              borderRadius: 10,
+                              border: "1px solid rgba(255, 255, 255, 0.12)",
+                              backgroundColor: "#1F1F1F",
+                              color: "#F5F3F1",
                               fontSize: 12,
+                              boxShadow: "0 8px 24px rgba(0, 0, 0, 0.5)",
                             }}
+                            itemStyle={{ color: "#F5F3F1" }}
+                            labelStyle={{ color: "#A7A29F", fontWeight: 600, marginBottom: 4 }}
                           />
                           <Area
                             type="monotone"
                             dataKey="prepared"
-                            stroke="#b5c4ba"
+                            stroke="#65A2D9"
                             fill="transparent"
                             strokeDasharray="5 4"
                             strokeWidth={2}
@@ -750,7 +755,7 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
                           <Area
                             type="monotone"
                             dataKey="served"
-                            stroke="#14856d"
+                            stroke="#FF4B1F"
                             fill="url(#servedFill)"
                             strokeWidth={2.5}
                           />
