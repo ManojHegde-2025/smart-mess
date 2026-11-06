@@ -574,10 +574,38 @@ export function Dashboard({ view = "overview" }: { view?: View }) {
                     disabled={aiBusy}
                   >
                     <Sparkles size={17} />
-                    {aiBusy ? "Analyzing with Gemini…" : aiInsights ? "Refresh AI insights" : "Generate AI insights"}
+                    {aiBusy
+                      ? "Analyzing with Gemini…"
+                      : aiError
+                        ? "Retry AI insights"
+                        : aiInsights
+                          ? "Refresh AI insights"
+                          : "Generate AI insights"}
                   </button>
                 </div>
-                {aiError && <div className="alert error">{aiError}</div>}
+                {aiError && (
+                  <div
+                    className="alert error ai-error-alert"
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: "1rem",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <span>{aiError}</span>
+                    <button
+                      type="button"
+                      className="button secondary sm ai-retry-btn"
+                      onClick={() => void generateAiInsights()}
+                      disabled={aiBusy}
+                      style={{ flexShrink: 0 }}
+                    >
+                      {aiBusy ? "Retrying…" : "Retry"}
+                    </button>
+                  </div>
+                )}
                 {!aiInsights && !aiError && (
                   <div className="ai-empty">
                     <Sparkles size={20} />

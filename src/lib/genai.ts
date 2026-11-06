@@ -44,8 +44,37 @@ export const insightInputSchema = z.object({
 
 export type InsightInput = z.infer<typeof insightInputSchema>;
 
-export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
-export const FALLBACK_GEMINI_MODEL = "gemini-3.5-flash-lite";
+export const DEFAULT_PRIMARY_MODEL = "gemini-3.8-flash";
+export const DEFAULT_FALLBACK_MODEL = "gemini-3.5-flash-lite";
+
+// Backward compatibility alias exports
+export const DEFAULT_GEMINI_MODEL = DEFAULT_PRIMARY_MODEL;
+export const FALLBACK_GEMINI_MODEL = DEFAULT_FALLBACK_MODEL;
+
+export const UNAVAILABLE_MESSAGE =
+  "AI insights are temporarily unavailable. Your meal attendance and forecasting systems are still operational. Please try again shortly.";
+
+export function getPrimaryModel(): string {
+  const envModel = process.env.GEMINI_MODEL?.trim();
+  if (envModel === "gemini-2.5-flash" || envModel === "gemini-2.0-flash") {
+    console.warn(
+      `[GenAI] Configured primary model "${envModel}" is deprecated by Google. Overriding to "${DEFAULT_PRIMARY_MODEL}".`,
+    );
+    return DEFAULT_PRIMARY_MODEL;
+  }
+  return envModel || DEFAULT_PRIMARY_MODEL;
+}
+
+export function getFallbackModel(): string {
+  const envModel = process.env.GEMINI_FALLBACK_MODEL?.trim();
+  if (envModel === "gemini-2.5-flash" || envModel === "gemini-2.0-flash") {
+    console.warn(
+      `[GenAI] Configured fallback model "${envModel}" is deprecated by Google. Overriding to "${DEFAULT_FALLBACK_MODEL}".`,
+    );
+    return DEFAULT_FALLBACK_MODEL;
+  }
+  return envModel || DEFAULT_FALLBACK_MODEL;
+}
 
 function promptFor(input: InsightInput) {
   return `You are the Generative AI intelligence layer of Smart Mess, a hostel mess management system.
@@ -88,10 +117,46 @@ interface GeminiErrorPayload {
   };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function parseRetryAfter(header: string | null): number | null {
+  if (!header) return null;
+  const seconds = Number(header.trim());
+  if (!Number.isNaN(seconds) && seconds > 0) {
+    return Math.min(seconds * 1000, 3000); // capped at 3s to stay well within serverless limits
+  }
+  const dateMs = Date.parse(header);
+  if (!Number.isNaN(dateMs)) {
+    const diff = dateMs - Date.now();
+    if (diff > 0) return Math.min(diff, 3000);
+  }
+  return null;
+}
+
+export function calculateBackoffDelay(attempt: number, retryAfterHeader: string | null): number {
+  const retryAfterMs = parseRetryAfter(retryAfterHeader);
+  if (retryAfterMs !== null) return retryAfterMs;
+  // Bounded exponential backoff with jitter:
+  // attempt 1: ~400ms base + 0-200ms jitter (~400-600ms)
+  // attempt 2: ~800ms base + 0-300ms jitter (~800-1100ms)
+  const baseMs = 400 * Math.pow(2, attempt - 1);
+  const jitterMs = Math.floor(Math.random() * (100 * attempt + 100));
+  return Math.min(baseMs + jitterMs, 2000);
+}
+
+export async function extractSafeErrorMessage(response: Response): Promise<string> {
+  const payload = (await response.json().catch(() => null)) as GeminiErrorPayload | null;
+  const rawMsg = payload?.error?.message || response.statusText || "Upstream request failed";
+  return String(rawMsg).replace(/key=[^&\s]+/gi, "key=[REDACTED]");
+}
+
 async function requestGemini(
   model: string,
   apiKey: string,
   prompt: string,
+  timeoutMs = 6500,
 ): Promise<Response> {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   try {
@@ -112,78 +177,21 @@ async function requestGemini(
           responseMimeType: "application/json",
         },
       }),
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(timeoutMs),
       cache: "no-store",
     });
   } catch (err: unknown) {
     if (err instanceof Error && (err.name === "TimeoutError" || err.message.includes("timeout"))) {
-      console.error(`[GenAI] Request timed out connecting to model "${model}".`);
-      throw new ApiError(504, "Generative AI request timed out.", "GATEWAY_TIMEOUT");
+      throw new ApiError(504, `Request timed out connecting to model "${model}".`, "GATEWAY_TIMEOUT");
     }
     const message = err instanceof Error ? err.message : "Network error";
-    console.error(`[GenAI] Failed to connect to Gemini API for model "${model}": ${message}`);
-    throw new ApiError(502, `Failed to connect to Generative AI service: ${message}`, "BAD_GATEWAY");
+    throw new ApiError(502, `Failed to connect to Generative AI service (${model}): ${message}`, "BAD_GATEWAY");
   }
-}
-
-async function parseGeminiError(response: Response, model: string): Promise<ApiError> {
-  const payload = (await response.json().catch(() => null)) as GeminiErrorPayload | null;
-  const rawMsg = payload?.error?.message || response.statusText || "Upstream request failed";
-  // Safe sanitization: redact any keys or query parameter tokens if reflected by upstream
-  const safeMsg = String(rawMsg).replace(/key=[^&\s]+/gi, "key=[REDACTED]");
-
-  console.error(
-    `[GenAI] Gemini API failed: HTTP ${response.status} (${response.statusText}) for model "${model}". Upstream message: "${safeMsg}"`,
-  );
-
-  if (response.status === 404) {
-    return new ApiError(
-      502,
-      `Configured Gemini model "${model}" is unavailable or deprecated: ${safeMsg}`,
-      "GENAI_MODEL_NOT_FOUND",
-    );
-  }
-  if (response.status === 400 || response.status === 401 || response.status === 403) {
-    return new ApiError(
-      502,
-      `Gemini API authentication failed (${response.status}): ${safeMsg}`,
-      "GENAI_AUTH_FAILED",
-    );
-  }
-  if (response.status === 429) {
-    return new ApiError(
-      429,
-      `Gemini API quota or rate limit exceeded (${response.status}): ${safeMsg}`,
-      "GENAI_RATE_LIMITED",
-    );
-  }
-  if (response.status >= 500) {
-    return new ApiError(
-      502,
-      `Gemini upstream service unavailable (${response.status}): ${safeMsg}`,
-      "GENAI_ERROR",
-    );
-  }
-  return new ApiError(
-    502,
-    `Generative AI service request failed (${response.status}): ${safeMsg}`,
-    "GENAI_ERROR",
-  );
 }
 
 export async function generateMessInsights(rawInput: unknown): Promise<AiInsight> {
   const input = insightInputSchema.parse(rawInput);
   const apiKey = process.env.GEMINI_API_KEY?.trim();
-  const configuredModel = process.env.GEMINI_MODEL?.trim();
-  let primaryModel = configuredModel || DEFAULT_GEMINI_MODEL;
-
-  // Protect against known decommissioned models that return 404
-  if (primaryModel === "gemini-2.5-flash" || primaryModel === "gemini-2.0-flash") {
-    console.warn(
-      `[GenAI] Configured model "${primaryModel}" is deprecated by Google. Overriding to "${DEFAULT_GEMINI_MODEL}".`,
-    );
-    primaryModel = DEFAULT_GEMINI_MODEL;
-  }
 
   if (!apiKey) {
     console.warn("[GenAI] Aborting insight generation: GEMINI_API_KEY is not configured.");
@@ -194,35 +202,165 @@ export async function generateMessInsights(rawInput: unknown): Promise<AiInsight
     );
   }
 
-  console.info(
-    `[GenAI] Requesting insights: model="${primaryModel}", apiKeyConfigured=true, mess="${input.messName}", date="${input.date}"`,
-  );
-
+  const primaryModel = getPrimaryModel();
+  const fallbackModel = getFallbackModel();
+  const modelChain = primaryModel !== fallbackModel ? [primaryModel, fallbackModel] : [primaryModel];
   const prompt = promptFor(input);
-  let response = await requestGemini(primaryModel, apiKey, prompt);
 
-  // Automatic fallback on 404 (model not found/deprecated)
-  if (response.status === 404 && primaryModel !== FALLBACK_GEMINI_MODEL) {
-    const fallbackModel = primaryModel !== DEFAULT_GEMINI_MODEL ? DEFAULT_GEMINI_MODEL : FALLBACK_GEMINI_MODEL;
-    console.warn(
-      `[GenAI] Primary model "${primaryModel}" returned 404 Not Found. Attempting fallback to "${fallbackModel}"...`,
-    );
-    const fallbackResponse = await requestGemini(fallbackModel, apiKey, prompt);
-    if (fallbackResponse.ok) {
-      console.info(`[GenAI] Fallback model "${fallbackModel}" succeeded.`);
-      response = fallbackResponse;
-      primaryModel = fallbackModel;
+  let successfulResponse: Response | null = null;
+  let activeModel = primaryModel;
+  let lastFailureStatus = 503;
+  let lastFailureMessage = "";
+
+  for (let mIdx = 0; mIdx < modelChain.length; mIdx++) {
+    const currentModel = modelChain[mIdx];
+    const isPrimary = currentModel === primaryModel;
+    // Primary model gets 1 initial attempt + max 2 retries (3 total attempts).
+    // Fallback model gets 1 initial attempt + 1 retry (2 total attempts).
+    const maxAttempts = isPrimary ? 3 : 2;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      console.info(
+        `[GenAI] [Attempt ${attempt}/${maxAttempts}] Requesting model "${currentModel}" (mess="${input.messName}", date="${input.date}")...`,
+      );
+
+      let response: Response;
+      try {
+        response = await requestGemini(currentModel, apiKey, prompt, 6500);
+      } catch (err: unknown) {
+        if (err instanceof ApiError && err.status === 504) {
+          lastFailureStatus = 504;
+          lastFailureMessage = err.message;
+          console.warn(`[GenAI] [Attempt ${attempt}/${maxAttempts}] Model "${currentModel}" timed out.`);
+          if (attempt < maxAttempts) {
+            await sleep(400);
+            continue;
+          }
+          break; // move to fallback
+        }
+        const msg = err instanceof Error ? err.message : "Network error";
+        lastFailureStatus = 502;
+        lastFailureMessage = msg;
+        console.warn(`[GenAI] [Attempt ${attempt}/${maxAttempts}] Model "${currentModel}" connection failed: ${msg}`);
+        if (attempt < maxAttempts) {
+          await sleep(400);
+          continue;
+        }
+        break; // move to fallback
+      }
+
+      if (response.ok) {
+        console.info(
+          `[GenAI] [Attempt ${attempt}/${maxAttempts}] Success: HTTP ${response.status} from model "${currentModel}".`,
+        );
+        successfulResponse = response;
+        activeModel = currentModel;
+        break;
+      }
+
+      const status = response.status;
+      lastFailureStatus = status;
+      const safeMsg = await extractSafeErrorMessage(response);
+      lastFailureMessage = safeMsg;
+
+      // DO NOT RETRY client errors or authentication failures
+      if (status === 400 || status === 401 || status === 403) {
+        console.error(
+          `[GenAI] Non-retryable client/auth error HTTP ${status} for model "${currentModel}". Message: "${safeMsg}"`,
+        );
+        throw new ApiError(
+          502,
+          `Gemini API authentication failed (${status}): ${safeMsg}`,
+          "GENAI_AUTH_FAILED",
+        );
+      }
+
+      // 404: Model not found or deprecated. Do NOT retry this model; switch immediately to fallback.
+      if (status === 404) {
+        console.warn(
+          `[GenAI] Model "${currentModel}" returned HTTP 404 (Not Found). Message: "${safeMsg}". Skipping retries for this model.`,
+        );
+        if (isPrimary && fallbackModel !== currentModel) {
+          console.warn(`[GenAI] Transitioning immediately to fallback model "${fallbackModel}"...`);
+        }
+        break;
+      }
+
+      // 429: Rate limit / quota exceeded
+      if (status === 429) {
+        console.error(
+          `[GenAI] Rate limit exceeded for model "${currentModel}": HTTP 429. Message: "${safeMsg}"`,
+        );
+        throw new ApiError(
+          429,
+          `Gemini API quota or rate limit exceeded (${status}): ${safeMsg}`,
+          "GENAI_RATE_LIMITED",
+        );
+      }
+
+      // 503 Service Unavailable: High demand or capacity spike
+      if (status === 503) {
+        console.warn(
+          `[GenAI] [Attempt ${attempt}/${maxAttempts}] Model "${currentModel}" returned HTTP 503 (UNAVAILABLE): "${safeMsg}".`,
+        );
+        if (attempt < maxAttempts) {
+          const delay = calculateBackoffDelay(attempt, response.headers.get("retry-after"));
+          console.info(
+            `[GenAI] Backing off for ${delay}ms before retry ${attempt + 1}/${maxAttempts} for model "${currentModel}"...`,
+          );
+          await sleep(delay);
+          continue;
+        } else if (isPrimary && fallbackModel !== currentModel) {
+          console.warn(
+            `[GenAI] Primary model "${currentModel}" exhausted ${maxAttempts} attempts on HTTP 503. Transitioning to fallback model "${fallbackModel}"...`,
+          );
+        }
+        break;
+      }
+
+      // 502 / 504 or other 5xx upstream errors
+      if (status >= 500) {
+        console.warn(
+          `[GenAI] [Attempt ${attempt}/${maxAttempts}] Model "${currentModel}" returned HTTP ${status}: "${safeMsg}".`,
+        );
+        if (attempt < maxAttempts) {
+          const delay = calculateBackoffDelay(attempt, response.headers.get("retry-after"));
+          console.info(`[GenAI] Backing off for ${delay}ms before retry for model "${currentModel}"...`);
+          await sleep(delay);
+          continue;
+        }
+        break;
+      }
+
+      // Any other unexpected error: stop retries for this model
+      console.error(
+        `[GenAI] Unexpected HTTP ${status} for model "${currentModel}": "${safeMsg}".`,
+      );
+      break;
     }
+
+    if (successfulResponse) break;
   }
 
-  if (!response.ok) {
-    throw await parseGeminiError(response, primaryModel);
+  // If all models and attempts were exhausted
+  if (!successfulResponse) {
+    console.error(
+      `[GenAI] All models in chain (${modelChain.join(", ")}) exhausted without success. Last status: ${lastFailureStatus}. Last message: "${lastFailureMessage}".`,
+    );
+    if (lastFailureStatus === 503 || lastFailureStatus === 502 || lastFailureStatus === 504) {
+      throw new ApiError(503, UNAVAILABLE_MESSAGE, "SERVICE_UNAVAILABLE");
+    }
+    throw new ApiError(
+      502,
+      `Generative AI service request failed (${lastFailureStatus}): ${lastFailureMessage || "Upstream unavailable"}`,
+      "GENAI_ERROR",
+    );
   }
 
-  const payload = (await response.json()) as { candidates?: GeminiCandidate[] };
+  const payload = (await successfulResponse.json()) as { candidates?: GeminiCandidate[] };
   const text = payload.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) {
-    console.error(`[GenAI] Model "${primaryModel}" returned no content.`);
+    console.error(`[GenAI] Model "${activeModel}" returned no content.`);
     throw new ApiError(
       502,
       "Generative AI returned no content.",
@@ -240,7 +378,7 @@ export async function generateMessInsights(rawInput: unknown): Promise<AiInsight
     }
     parsed = JSON.parse(cleaned);
   } catch {
-    console.error(`[GenAI] Model "${primaryModel}" returned non-JSON text.`);
+    console.error(`[GenAI] Model "${activeModel}" returned non-JSON text.`);
     throw new ApiError(
       502,
       "Generative AI returned invalid JSON.",
@@ -250,7 +388,7 @@ export async function generateMessInsights(rawInput: unknown): Promise<AiInsight
 
   try {
     const validated = insightSchema.parse(parsed);
-    console.info(`[GenAI] Successfully generated and validated insights with model "${primaryModel}".`);
+    console.info(`[GenAI] Successfully generated and validated insights with model "${activeModel}".`);
     return validated;
   } catch (err) {
     console.error(`[GenAI] Insights validation error: ${err instanceof Error ? err.message : "Schema error"}`);

@@ -7,6 +7,13 @@ import {
   generateMessInsights,
   insightInputSchema,
   insightSchema,
+  DEFAULT_PRIMARY_MODEL,
+  DEFAULT_FALLBACK_MODEL,
+  UNAVAILABLE_MESSAGE,
+  parseRetryAfter,
+  calculateBackoffDelay,
+  getPrimaryModel,
+  getFallbackModel,
   type InsightInput,
 } from "../src/lib/genai";
 import { POST } from "../src/app/api/[...path]/route";
@@ -109,7 +116,47 @@ test("Missing GEMINI_API_KEY throws 503 SERVICE_UNAVAILABLE gracefully", async (
   }
 });
 
-test("Mock Gemini API returns valid JSON and parses successfully", async () => {
+test("Primary model defaults to gemini-3.8-flash and fallback to gemini-3.5-flash-lite", () => {
+  const savedPrimary = process.env.GEMINI_MODEL;
+  const savedFallback = process.env.GEMINI_FALLBACK_MODEL;
+  try {
+    delete process.env.GEMINI_MODEL;
+    delete process.env.GEMINI_FALLBACK_MODEL;
+    assert.equal(getPrimaryModel(), DEFAULT_PRIMARY_MODEL);
+    assert.equal(getFallbackModel(), DEFAULT_FALLBACK_MODEL);
+    assert.equal(DEFAULT_PRIMARY_MODEL, "gemini-3.8-flash");
+    assert.equal(DEFAULT_FALLBACK_MODEL, "gemini-3.5-flash-lite");
+
+    process.env.GEMINI_MODEL = "custom-primary-model";
+    process.env.GEMINI_FALLBACK_MODEL = "custom-fallback-model";
+    assert.equal(getPrimaryModel(), "custom-primary-model");
+    assert.equal(getFallbackModel(), "custom-fallback-model");
+
+    // Overrides deprecated models
+    process.env.GEMINI_MODEL = "gemini-2.5-flash";
+    assert.equal(getPrimaryModel(), DEFAULT_PRIMARY_MODEL);
+  } finally {
+    if (savedPrimary !== undefined) process.env.GEMINI_MODEL = savedPrimary;
+    else delete process.env.GEMINI_MODEL;
+    if (savedFallback !== undefined) process.env.GEMINI_FALLBACK_MODEL = savedFallback;
+    else delete process.env.GEMINI_FALLBACK_MODEL;
+  }
+});
+
+test("Retry-After header parsing and backoff delay calculation", () => {
+  assert.equal(parseRetryAfter("2"), 2000);
+  assert.equal(parseRetryAfter("10"), 3000); // capped at 3s
+  assert.equal(parseRetryAfter(null), null);
+  assert.equal(parseRetryAfter("invalid"), null);
+
+  const delay1 = calculateBackoffDelay(1, null);
+  assert.equal(delay1 >= 400 && delay1 <= 700, true);
+
+  const delayWithHeader = calculateBackoffDelay(1, "1");
+  assert.equal(delayWithHeader, 1000);
+});
+
+test("Mock Gemini API returns valid JSON and parses successfully with primary model", async () => {
   const mockResult = {
     summary: "XGBoost demand predictions align with recent attendance trends.",
     demandAnalysis: "Lunch demand peaked on Thursday at 410 meals; Friday forecast expects 413.",
@@ -140,7 +187,6 @@ test("Mock Gemini API returns valid JSON and parses successfully", async () => {
 
   try {
     process.env.GEMINI_API_KEY = "test-mock-gemini-key-1234567890123456";
-    // Redirect fetch to local mock server
     globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === "string" ? url : url.toString();
       if (urlStr.includes("generativelanguage.googleapis.com")) {
@@ -161,27 +207,27 @@ test("Mock Gemini API returns valid JSON and parses successfully", async () => {
   }
 });
 
-test("Mock Gemini API response wrapped in markdown code fence parses cleanly", async () => {
+test("Retry logic: Primary model returns 503 on attempt 1, retries and succeeds on attempt 2", async () => {
   const mockResult = {
-    summary: "Executive briefing: stable attendance patterns observed.",
-    demandAnalysis: "XGBoost predicts consistent attendance across all services.",
-    wasteAnalysis: "Preparation exceeded served by less than 5%.",
-    recommendation: "Maintain current preparation buffer.",
-    alerts: ["[INFO] All operations normal."],
+    summary: "Successful recovery after temporary 503.",
+    demandAnalysis: "Demand steady.",
+    wasteAnalysis: "Minimal waste.",
+    recommendation: "Maintain buffer.",
+    alerts: [],
   };
 
+  let attempts = 0;
   const server = createServer((_req, res) => {
+    attempts++;
+    if (attempts === 1) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "Model overloaded", status: "UNAVAILABLE" } }));
+      return;
+    }
     res.writeHead(200, { "content-type": "application/json" });
-    // Wrapped in ```json ... ```
     res.end(
       JSON.stringify({
-        candidates: [
-          {
-            content: {
-              parts: [{ text: `\`\`\`json\n${JSON.stringify(mockResult)}\n\`\`\`` }],
-            },
-          },
-        ],
+        candidates: [{ content: { parts: [{ text: JSON.stringify(mockResult) }] } }],
       }),
     );
   });
@@ -192,7 +238,7 @@ test("Mock Gemini API response wrapped in markdown code fence parses cleanly", a
   const originalKey = process.env.GEMINI_API_KEY;
 
   try {
-    process.env.GEMINI_API_KEY = "test-mock-gemini-key-1234567890123456";
+    process.env.GEMINI_API_KEY = "test-mock-gemini-key";
     globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === "string" ? url : url.toString();
       if (urlStr.includes("generativelanguage.googleapis.com")) {
@@ -203,6 +249,7 @@ test("Mock Gemini API response wrapped in markdown code fence parses cleanly", a
 
     const insights = await generateMessInsights(sampleInput);
     assert.equal(insights.summary, mockResult.summary);
+    assert.equal(attempts, 2);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalKey) process.env.GEMINI_API_KEY = originalKey;
@@ -211,18 +258,27 @@ test("Mock Gemini API response wrapped in markdown code fence parses cleanly", a
   }
 });
 
-test("Mock Gemini API returning invalid JSON throws 502 GENAI_INVALID_JSON", async () => {
-  const server = createServer((_req, res) => {
+test("Fallback logic: Primary model 503 on all 3 attempts falls back to gemini-3.5-flash-lite and succeeds", async () => {
+  const mockResult = {
+    summary: "Fallback model produced insights after primary 503.",
+    demandAnalysis: "Demand is tracking standard patterns.",
+    wasteAnalysis: "Waste within bounds.",
+    recommendation: "Operational buffer maintained.",
+    alerts: ["[INFO] Served via fallback model."],
+  };
+
+  const requestedUrls: string[] = [];
+  const server = createServer((req, res) => {
+    requestedUrls.push(req.url ?? "");
+    if (req.url?.includes("gemini-3.8-flash")) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "Model capacity full", status: "UNAVAILABLE" } }));
+      return;
+    }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(
       JSON.stringify({
-        candidates: [
-          {
-            content: {
-              parts: [{ text: "This is not JSON at all." }],
-            },
-          },
-        ],
+        candidates: [{ content: { parts: [{ text: JSON.stringify(mockResult) }] } }],
       }),
     );
   });
@@ -233,7 +289,43 @@ test("Mock Gemini API returning invalid JSON throws 502 GENAI_INVALID_JSON", asy
   const originalKey = process.env.GEMINI_API_KEY;
 
   try {
-    process.env.GEMINI_API_KEY = "test-mock-gemini-key-1234567890123456";
+    process.env.GEMINI_API_KEY = "test-mock-gemini-key";
+    globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (urlStr.includes("generativelanguage.googleapis.com")) {
+        return originalFetch(`http://127.0.0.1:${port}${new URL(urlStr).pathname}`, init);
+      }
+      return originalFetch(url, init);
+    }) as typeof fetch;
+
+    const insights = await generateMessInsights(sampleInput);
+    assert.equal(insights.summary, mockResult.summary);
+    // Primary model attempted 3 times (attempt 1 + 2 retries), then fallback attempted once and succeeded
+    const primaryCalls = requestedUrls.filter((u) => u.includes("gemini-3.8-flash"));
+    const fallbackCalls = requestedUrls.filter((u) => u.includes("gemini-3.5-flash-lite"));
+    assert.equal(primaryCalls.length, 3);
+    assert.equal(fallbackCalls.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey) process.env.GEMINI_API_KEY = originalKey;
+    else delete process.env.GEMINI_API_KEY;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("Both models unavailable throws 503 with exact UNAVAILABLE_MESSAGE", async () => {
+  const server = createServer((_req, res) => {
+    res.writeHead(503, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "High demand across models", status: "UNAVAILABLE" } }));
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.GEMINI_API_KEY;
+
+  try {
+    process.env.GEMINI_API_KEY = "test-mock-gemini-key";
     globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === "string" ? url : url.toString();
       if (urlStr.includes("generativelanguage.googleapis.com")) {
@@ -244,7 +336,7 @@ test("Mock Gemini API returning invalid JSON throws 502 GENAI_INVALID_JSON", asy
 
     await assert.rejects(
       async () => generateMessInsights(sampleInput),
-      (err: any) => err.status === 502 && err.code === "GENAI_INVALID_JSON",
+      (err: any) => err.status === 503 && err.message === UNAVAILABLE_MESSAGE,
     );
   } finally {
     globalThis.fetch = originalFetch;
@@ -254,10 +346,12 @@ test("Mock Gemini API returning invalid JSON throws 502 GENAI_INVALID_JSON", asy
   }
 });
 
-test("Mock Gemini API HTTP 500 throws 502 GENAI_ERROR", async () => {
+test("Non-retryable client errors (HTTP 400, 401, 403) fail immediately without retry", async () => {
+  let callCount = 0;
   const server = createServer((_req, res) => {
-    res.writeHead(500, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: { message: "Internal server error" } }));
+    callCount++;
+    res.writeHead(401, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "API key invalid" } }));
   });
 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -266,7 +360,7 @@ test("Mock Gemini API HTTP 500 throws 502 GENAI_ERROR", async () => {
   const originalKey = process.env.GEMINI_API_KEY;
 
   try {
-    process.env.GEMINI_API_KEY = "test-mock-gemini-key-1234567890123456";
+    process.env.GEMINI_API_KEY = "test-mock-gemini-key";
     globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === "string" ? url : url.toString();
       if (urlStr.includes("generativelanguage.googleapis.com")) {
@@ -277,7 +371,79 @@ test("Mock Gemini API HTTP 500 throws 502 GENAI_ERROR", async () => {
 
     await assert.rejects(
       async () => generateMessInsights(sampleInput),
-      (err: any) => err.status === 502 && err.code === "GENAI_ERROR",
+      (err: any) => err.status === 502 && err.code === "GENAI_AUTH_FAILED",
+    );
+    // Verified: No retries were attempted for authentication failure
+    assert.equal(callCount, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey) process.env.GEMINI_API_KEY = originalKey;
+    else delete process.env.GEMINI_API_KEY;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("Rate limit HTTP 429 throws 429 GENAI_RATE_LIMITED", async () => {
+  const server = createServer((_req, res) => {
+    res.writeHead(429, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "Resource exhausted" } }));
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.GEMINI_API_KEY;
+
+  try {
+    process.env.GEMINI_API_KEY = "test-mock-gemini-key";
+    globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (urlStr.includes("generativelanguage.googleapis.com")) {
+        return originalFetch(`http://127.0.0.1:${port}`, init);
+      }
+      return originalFetch(url, init);
+    }) as typeof fetch;
+
+    await assert.rejects(
+      async () => generateMessInsights(sampleInput),
+      (err: any) => err.status === 429 && err.code === "GENAI_RATE_LIMITED",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey) process.env.GEMINI_API_KEY = originalKey;
+    else delete process.env.GEMINI_API_KEY;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("Sanitization redacts secret key parameter from error message", async () => {
+  const server = createServer((_req, res) => {
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "Invalid request for key=SECRET_KEY_12345 in parameter" } }));
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.GEMINI_API_KEY;
+
+  try {
+    process.env.GEMINI_API_KEY = "SECRET_KEY_12345";
+    globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (urlStr.includes("generativelanguage.googleapis.com")) {
+        return originalFetch(`http://127.0.0.1:${port}`, init);
+      }
+      return originalFetch(url, init);
+    }) as typeof fetch;
+
+    await assert.rejects(
+      async () => generateMessInsights(sampleInput),
+      (err: any) => {
+        assert.equal(err.message.includes("SECRET_KEY_12345"), false);
+        assert.equal(err.message.includes("key=[REDACTED]"), true);
+        return true;
+      },
     );
   } finally {
     globalThis.fetch = originalFetch;
@@ -325,7 +491,6 @@ test("Security: /api/manager/ai-insights rejects student role with 403 FORBIDDEN
     .setExpirationTime("1h")
     .sign(secret("SESSION_SECRET"));
 
-  // Mock database query to return active student
   const originalUrl = process.env.DATABASE_URL;
   process.env.DATABASE_URL = "postgres://mock:mock@127.0.0.1:5432/mock";
   const { getPool, closePool } = await import("../src/lib/db");
@@ -373,166 +538,5 @@ test("Security: /api/manager/ai-insights rejects student role with 403 FORBIDDEN
     if (originalSecret !== undefined) process.env.SESSION_SECRET = originalSecret;
     if (originalUrl) process.env.DATABASE_URL = originalUrl;
     else delete process.env.DATABASE_URL;
-  }
-});
-
-test("Diagnostics: Mock Gemini API HTTP 404 triggers automatic fallback to fallback model", async () => {
-  const mockResult = {
-    summary: "Fallback model successfully produced operational summary.",
-    demandAnalysis: "Demand patterns stable.",
-    wasteAnalysis: "Waste remained minimal.",
-    recommendation: "Keep current safety buffer.",
-    alerts: [],
-  };
-
-  const requestedUrls: string[] = [];
-  const server = createServer((req, res) => {
-    requestedUrls.push(req.url ?? "");
-    if (req.url?.includes("custom-unknown-model")) {
-      res.writeHead(404, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: { message: "Model custom-unknown-model not found", status: "NOT_FOUND" } }));
-      return;
-    }
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(
-      JSON.stringify({
-        candidates: [{ content: { parts: [{ text: JSON.stringify(mockResult) }] } }],
-      }),
-    );
-  });
-
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const port = (server.address() as { port: number }).port;
-  const originalFetch = globalThis.fetch;
-  const originalKey = process.env.GEMINI_API_KEY;
-  const originalModel = process.env.GEMINI_MODEL;
-
-  try {
-    process.env.GEMINI_API_KEY = "test-mock-gemini-key";
-    process.env.GEMINI_MODEL = "custom-unknown-model";
-    globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
-      const urlStr = typeof url === "string" ? url : url.toString();
-      if (urlStr.includes("generativelanguage.googleapis.com")) {
-        return originalFetch(`http://127.0.0.1:${port}${new URL(urlStr).pathname}?${new URL(urlStr).searchParams}`, init);
-      }
-      return originalFetch(url, init);
-    }) as typeof fetch;
-
-    const insights = await generateMessInsights(sampleInput);
-    assert.equal(insights.summary, mockResult.summary);
-    // Verified that both the initial model and fallback model were requested
-    assert.equal(requestedUrls.length, 2);
-    assert.equal(requestedUrls[0].includes("custom-unknown-model"), true);
-    assert.equal(requestedUrls[1].includes("gemini-3.5-flash"), true);
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalKey) process.env.GEMINI_API_KEY = originalKey;
-    else delete process.env.GEMINI_API_KEY;
-    if (originalModel) process.env.GEMINI_MODEL = originalModel;
-    else delete process.env.GEMINI_MODEL;
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
-
-test("Diagnostics: Mock Gemini API HTTP 429 returns 429 GENAI_RATE_LIMITED", async () => {
-  const server = createServer((_req, res) => {
-    res.writeHead(429, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: { message: "Resource exhausted: rate limit exceeded" } }));
-  });
-
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const port = (server.address() as { port: number }).port;
-  const originalFetch = globalThis.fetch;
-  const originalKey = process.env.GEMINI_API_KEY;
-
-  try {
-    process.env.GEMINI_API_KEY = "test-mock-gemini-key";
-    globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
-      const urlStr = typeof url === "string" ? url : url.toString();
-      if (urlStr.includes("generativelanguage.googleapis.com")) {
-        return originalFetch(`http://127.0.0.1:${port}`, init);
-      }
-      return originalFetch(url, init);
-    }) as typeof fetch;
-
-    await assert.rejects(
-      async () => generateMessInsights(sampleInput),
-      (err: any) => err.status === 429 && err.code === "GENAI_RATE_LIMITED",
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalKey) process.env.GEMINI_API_KEY = originalKey;
-    else delete process.env.GEMINI_API_KEY;
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
-
-test("Diagnostics: Mock Gemini API HTTP 403 returns 502 GENAI_AUTH_FAILED", async () => {
-  const server = createServer((_req, res) => {
-    res.writeHead(403, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: { message: "Permission denied for API key" } }));
-  });
-
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const port = (server.address() as { port: number }).port;
-  const originalFetch = globalThis.fetch;
-  const originalKey = process.env.GEMINI_API_KEY;
-
-  try {
-    process.env.GEMINI_API_KEY = "test-mock-gemini-key";
-    globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
-      const urlStr = typeof url === "string" ? url : url.toString();
-      if (urlStr.includes("generativelanguage.googleapis.com")) {
-        return originalFetch(`http://127.0.0.1:${port}`, init);
-      }
-      return originalFetch(url, init);
-    }) as typeof fetch;
-
-    await assert.rejects(
-      async () => generateMessInsights(sampleInput),
-      (err: any) => err.status === 502 && err.code === "GENAI_AUTH_FAILED",
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalKey) process.env.GEMINI_API_KEY = originalKey;
-    else delete process.env.GEMINI_API_KEY;
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
-
-test("Diagnostics: Sanitization redacts secret key parameter from error message", async () => {
-  const server = createServer((_req, res) => {
-    res.writeHead(400, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: { message: "Invalid request for key=SECRET_KEY_12345 in parameter" } }));
-  });
-
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const port = (server.address() as { port: number }).port;
-  const originalFetch = globalThis.fetch;
-  const originalKey = process.env.GEMINI_API_KEY;
-
-  try {
-    process.env.GEMINI_API_KEY = "SECRET_KEY_12345";
-    globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
-      const urlStr = typeof url === "string" ? url : url.toString();
-      if (urlStr.includes("generativelanguage.googleapis.com")) {
-        return originalFetch(`http://127.0.0.1:${port}`, init);
-      }
-      return originalFetch(url, init);
-    }) as typeof fetch;
-
-    await assert.rejects(
-      async () => generateMessInsights(sampleInput),
-      (err: any) => {
-        assert.equal(err.message.includes("SECRET_KEY_12345"), false);
-        assert.equal(err.message.includes("key=[REDACTED]"), true);
-        return true;
-      },
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalKey) process.env.GEMINI_API_KEY = originalKey;
-    else delete process.env.GEMINI_API_KEY;
-    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
