@@ -102,12 +102,13 @@ export function Shell({
             </Link>
           ))}
         </nav>
-        <div className="sidebar-note">
-          <span className="status-dot" /> South Mess pilot
+        <div className={`sidebar-note ${mode === "demo" ? "demo" : "live"}`}>
+          <span className={`status-dot ${mode === "demo" ? "demo" : "live"}`} />
+          <strong>{mode === "demo" ? "DEMO MODE ACTIVE" : "LIVE MODE ACTIVE"}</strong>
           <p>
             {mode === "demo"
-              ? "A safe space to explore. All records are synthetic."
-              : "Connected meal operations, one plate at a time."}
+              ? "Deterministic 84-day synthetic fixture. In-browser sandbox; zero production writes."
+              : "Connected to PostgreSQL database. Genuine student and meal records only."}
           </p>
         </div>
         <div className="sidebar-bottom">
@@ -161,9 +162,9 @@ export function Shell({
             </strong>
           </div>
           <div className="topbar-right">
-            <span className="environment-pill">
+            <span className={`environment-pill ${mode === "demo" ? "demo-pill" : "live-pill"}`}>
               <ShieldCheck size={14} />
-              {mode === "demo" ? "Demo workspace" : "Live workspace"}
+              {mode === "demo" ? "DEMO MODE · Synthetic Data (84 Days)" : "LIVE MODE · Production Data"}
             </span>
             <span className="mini-avatar">{user.name[0]}</span>
           </div>
@@ -172,9 +173,9 @@ export function Shell({
           <div className="demo-banner">
             <span>
               <CircleHelp size={15} />
-              <strong>Interactive demo</strong>
+              <strong>Interactive Demo Mode</strong>
               <span className="demo-description">
-                Synthetic data · saved in this browser · resets daily
+                84-day deterministic synthetic dataset · in-browser sandbox · zero production writes
               </span>
             </span>
             <button onClick={reset}>Reset demo</button>

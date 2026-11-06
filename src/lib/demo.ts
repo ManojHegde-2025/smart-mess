@@ -1,5 +1,9 @@
 import { demoHistory } from "./demo-history";
 import {
+  generateSyntheticExceptions,
+  generateSyntheticLeaves,
+} from "./synthetic-data";
+import {
   addDays,
   baselineForecast,
   currentMeal,
@@ -91,15 +95,19 @@ function seed(): DemoState {
     { id: "egg", name: "Boiled egg", price: 1200 },
   ];
   const usage = demoHistory(today);
-  const events: MealEvent[] = Array.from({ length: 6 }, (_, i) => ({
-    id: crypto.randomUUID(),
-    userId: studentId,
-    meal: MEALS[i % 3],
-    serviceDate: addDays(today, -1 - Math.floor(i / 3)),
-    scannedAt: `${addDays(today, -1 - Math.floor(i / 3))}T${["03", "07", "14"][i % 3]}:30:00Z`,
-    decision: "accepted",
-    reason: "ACCEPTED",
-  }));
+  const exceptions = generateSyntheticExceptions(today, users);
+  const events: MealEvent[] = [
+    ...exceptions,
+    ...Array.from({ length: 6 }, (_, i) => ({
+      id: crypto.randomUUID(),
+      userId: studentId,
+      meal: MEALS[i % 3],
+      serviceDate: addDays(today, -1 - Math.floor(i / 3)),
+      scannedAt: `${addDays(today, -1 - Math.floor(i / 3))}T${["03", "07", "14"][i % 3]}:30:00Z`,
+      decision: "accepted" as const,
+      reason: "ACCEPTED",
+    })),
+  ];
   const ledger: LedgerEntry[] = users
     .filter((u) => u.role === "student")
     .map((u, i) => ({
@@ -110,26 +118,16 @@ function seed(): DemoState {
       note: "Sample opening credit",
       createdAt: new Date(Date.now() - 7 * 86400000).toISOString(),
     }));
-  for (const e of events)
+  for (const e of events.filter((ev) => ev.decision === "accepted"))
     ledger.push({
       id: crypto.randomUUID(),
-      userId: studentId,
+      userId: e.userId,
       amount: -settings.prices[e.meal],
       kind: "meal",
       note: `${e.meal} · ${e.serviceDate}`,
       createdAt: e.scannedAt,
     });
-  const leaves = users
-    .filter((u) => u.role === "student")
-    .slice(2, 6)
-    .map((u) => ({
-      id: crypto.randomUUID(),
-      userId: u.id,
-      startsOn: today,
-      endsOn: addDays(today, 2),
-      status: "approved" as const,
-      source: "demo fixture",
-    }));
+  const leaves = generateSyntheticLeaves(today, users);
   return {
     date: today,
     user: null,

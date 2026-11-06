@@ -34,6 +34,7 @@ import {
   usageSchema,
   wardenSchema,
 } from "./validation";
+import { assertNotSynthetic } from "./synthetic-data";
 import type { z } from "zod";
 
 export async function settings(messId: string): Promise<Settings> {
@@ -127,6 +128,7 @@ export async function issueQr(user: User, meal: Meal) {
   };
 }
 export async function scanMeal(user: User, token: string): Promise<ScanResult> {
+  assertNotSynthetic(user, "scanMeal (user)");
   const config = await settings(user.messId);
   const now = new Date();
   const local = localTime(now, config.timeZone);
@@ -307,6 +309,8 @@ export async function saveSettings(
   user: User,
   input: z.infer<typeof settingsSchema>,
 ) {
+  assertNotSynthetic(user, "saveSettings (user)");
+  assertNotSynthetic(input, "saveSettings (input)");
   const before = await settings(user.messId);
   const after = { ...input, configured: true, timeZone: before.timeZone };
   await transaction(async (c) => {
@@ -331,6 +335,8 @@ export async function saveUsage(
   user: User,
   input: z.infer<typeof usageSchema>,
 ) {
+  assertNotSynthetic(user, "saveUsage (user)");
+  assertNotSynthetic(input, "saveUsage (input)");
   const config = await settings(user.messId);
   if (input.date > localTime(new Date(), config.timeZone).date)
     throw new ApiError(
@@ -359,6 +365,8 @@ export async function adjustLedger(
   user: User,
   input: z.infer<typeof ledgerSchema>,
 ) {
+  assertNotSynthetic(user, "adjustLedger (user)");
+  assertNotSynthetic(input, "adjustLedger (input)");
   await transaction(async (c) => {
     const student = await c.query(
       "SELECT id FROM users WHERE id=$1 AND mess_id=$2 AND role='student'",
@@ -410,6 +418,8 @@ export async function orderAddon(
   user: User,
   input: z.infer<typeof addonSchema>,
 ) {
+  assertNotSynthetic(user, "orderAddon (user)");
+  assertNotSynthetic(input, "orderAddon (input)");
   const config = await settings(user.messId);
   if (!config.configured)
     throw new ApiError(409, "Mess policy is not configured.");

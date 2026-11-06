@@ -541,6 +541,40 @@ td strong {
   font-size: 9px;
   color: #899b8d;
 }
+.environment-pill.demo-pill {
+  background: #fff7e9;
+  color: #996e1b;
+  border: 1px solid #f0dcbe;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.environment-pill.live-pill {
+  background: #ebf7f0;
+  color: #1a6e49;
+  border: 1px solid #c8e8d5;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.status-dot.demo {
+  background: #d97706;
+}
+.status-dot.live {
+  background: #10b981;
+}
+.sidebar-note.demo {
+  background: #fdfaf4;
+  border-left: 3px solid #d97706;
+  border-radius: 4px;
+}
+.sidebar-note.live {
+  background: #f5f9f6;
+  border-left: 3px solid #10b981;
+  border-radius: 4px;
+}
 .mini-avatar {
   display: grid;
   place-content: center;

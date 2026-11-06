@@ -115,7 +115,7 @@ async function handler(request: NextRequest) {
         const history = demoHistory(today);
         const forecasts = await demandForecasts(history, today, config.safetyBuffer);
         input = {
-          messName: config.messName,
+          messName: `${config.messName} (Demo)`,
           date: today,
           forecasts: forecasts.map((f) => ({
             meal: f.meal,
@@ -125,10 +125,10 @@ async function handler(request: NextRequest) {
             mae: f.mae,
             status: f.mlStatus,
           })),
-          counts: { breakfast: 24, lunch: 29, dinner: 27 },
-          prepared: { breakfast: 25, lunch: 31, dinner: 28 },
+          counts: { breakfast: 33, lunch: 42, dinner: 0 },
+          prepared: { breakfast: 37, lunch: 46, dinner: 40 },
           leaveCount: 4,
-          exceptionCount: 1,
+          exceptionCount: 3,
           recentUsage: history.slice(-21),
         };
       }
@@ -212,39 +212,26 @@ async function handler(request: NextRequest) {
     requireRole(user, "manager");
     if (path === "/manager/ai-insights" && method === "POST") {
       checkManagerAiRateLimit(user.id);
-      const raw = await readBody(request);
-      let input: InsightInput;
-      let parsed: any = null;
-      try {
-        parsed = raw && raw.trim() !== "" ? JSON.parse(raw) : null;
-      } catch {}
-      if (
-        parsed &&
-        typeof parsed === "object" &&
-        parsed.messName &&
-        Array.isArray(parsed.forecasts)
-      ) {
-        input = insightInputSchema.parse(parsed);
-      } else {
-        const overview = await service.managerOverview(user);
-        input = {
-          messName: overview.settings.messName,
-          date: overview.today,
-          forecasts: overview.forecasts.map((f) => ({
-            meal: f.meal,
-            predicted: f.predicted,
-            prepare: f.prepare,
-            method: f.method,
-            mae: f.mae,
-            status: f.mlStatus,
-          })),
-          counts: overview.counts,
-          prepared: overview.prepared,
-          leaveCount: overview.leaveCount,
-          exceptionCount: overview.exceptions.length,
-          recentUsage: overview.history.slice(-21),
-        };
-      }
+      // In live mode, insights are strictly derived from genuine database records.
+      // Client-supplied input is not accepted to guarantee that synthetic data cannot infiltrate live mode.
+      const overview = await service.managerOverview(user);
+      const input: InsightInput = {
+        messName: overview.settings.messName,
+        date: overview.today,
+        forecasts: overview.forecasts.map((f) => ({
+          meal: f.meal,
+          predicted: f.predicted,
+          prepare: f.prepare,
+          method: f.method,
+          mae: f.mae,
+          status: f.mlStatus,
+        })),
+        counts: overview.counts,
+        prepared: overview.prepared,
+        leaveCount: overview.leaveCount,
+        exceptionCount: overview.exceptions.length,
+        recentUsage: overview.history.slice(-21),
+      };
       return json(await generateMessInsights(input));
     }
     if (path === "/manager/overview" && method === "GET")
