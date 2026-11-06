@@ -164,10 +164,7 @@ export function Shell({
           <div className="topbar-right">
             <span className={`environment-pill ${mode === "demo" ? "demo-pill" : "live-pill"}`}>
               <ShieldCheck size={14} />
-              <span>{mode === "demo" ? "DEMO MODE" : "LIVE MODE"}</span>
-              <span className="pill-detail">
-                {mode === "demo" ? " · Synthetic (84d)" : " · Production"}
-              </span>
+              {mode === "demo" ? "Demo mode" : "Live mode"}
             </span>
             <span className="mini-avatar">{user.name[0]}</span>
           </div>
@@ -176,7 +173,7 @@ export function Shell({
           <div className="demo-banner">
             <span>
               <CircleHelp size={15} />
-              <strong>Interactive Demo Mode</strong>
+              <strong>Interactive demo</strong>
               <span className="demo-description">
                 84-day deterministic synthetic dataset · in-browser sandbox · zero production writes
               </span>
