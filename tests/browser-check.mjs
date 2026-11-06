@@ -142,24 +142,34 @@ try {
     !sidebar || sidebar.x + sidebar.width < 1,
     "Mobile sidebar should be hidden",
   );
+  const studentOverflow = await page.evaluate(() => {
+    const w = window.innerWidth;
+    return Array.from(document.querySelectorAll("*"))
+      .filter((el) => el.getBoundingClientRect().right > w + 1)
+      .map((el) => `${el.tagName}.${el.className} (${Math.round(el.getBoundingClientRect().right)} > ${w})`)
+      .slice(0, 5);
+  });
   assert.equal(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth > window.innerWidth,
-    ),
-    false,
-    "Student layout overflow",
+    studentOverflow.length,
+    0,
+    `Student layout overflow: ${studentOverflow.join(", ")}`,
   );
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("button", { name: "Sign out" }).click();
   await page.getByRole("button", { name: "I manage the mess" }).click();
   await page.getByRole("heading", { name: "Your mess, at a glance" }).waitFor();
   await page.waitForTimeout(500);
+  const managerOverflow = await page.evaluate(() => {
+    const w = window.innerWidth;
+    return Array.from(document.querySelectorAll("*"))
+      .filter((el) => el.getBoundingClientRect().right > w + 1)
+      .map((el) => `${el.tagName}.${el.className} (${Math.round(el.getBoundingClientRect().right)} > ${w})`)
+      .slice(0, 5);
+  });
   assert.equal(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth > window.innerWidth,
-    ),
-    false,
-    "Manager layout overflow",
+    managerOverflow.length,
+    0,
+    `Manager layout overflow: ${managerOverflow.join(", ")}`,
   );
   assert.deepEqual(errors, [], "Unexpected browser errors");
   console.log(
