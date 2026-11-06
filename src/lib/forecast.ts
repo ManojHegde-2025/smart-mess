@@ -45,10 +45,7 @@ export async function demandForecasts(
   history: Usage[],
   today: string,
   safetyBuffer: number,
-  options?: { isSynthetic?: boolean },
 ): Promise<Forecast[]> {
-  const isSynthetic =
-    options?.isSynthetic ?? history.some((r) => Boolean((r as any).isSynthetic));
   // Today may still be in progress; future observations are never training data.
   const completed = history.filter((row) => row.date < today);
   return Promise.all(
@@ -56,7 +53,6 @@ export async function demandForecasts(
       const baseline: Forecast = {
         ...baselineForecast(completed, meal, addDays(today, 1), safetyBuffer),
         source: "local",
-        isSynthetic: isSynthetic || undefined,
       };
       const url = process.env.ML_SERVICE_URL;
       const key = process.env.ML_API_KEY;
@@ -83,7 +79,7 @@ export async function demandForecasts(
         safety_buffer: safetyBuffer,
       });
       const id = createHash("sha256")
-        .update(JSON.stringify([url, key, meal, body, isSynthetic]))
+        .update(JSON.stringify([url, key, meal, body]))
         .digest("hex");
       const saved = cache.get(id);
       if (saved && saved.expires > Date.now()) return saved.value;

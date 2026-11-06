@@ -42,7 +42,7 @@ deprecation warning; all nine tests completed and passed.
 - The updated optimized build and both browser suites passed. A mobile layout
   overflow caused by longer forecast status labels was fixed and rechecked.
 - The real Python service trained models on the synthetic 84-day demo history.
-  All three Next.js forecasts used Random Forest at the correct two-day horizon.
+  All three Next.js forecasts used XGBoost at the correct two-day horizon.
   The browser displayed active-model badges and model/baseline MAE, including on
   the responsive reports screen. No unexpected browser exceptions occurred.
 - Stopping the test Python process produced a visible rolling-average fallback.

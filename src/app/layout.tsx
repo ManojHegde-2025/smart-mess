@@ -16,7 +16,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#121215",
+  themeColor: "#12634f",
 };
 export const dynamic = "force-dynamic";
 export default function Layout({ children }: { children: React.ReactNode }) {

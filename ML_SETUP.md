@@ -37,7 +37,7 @@ No PowerShell execution-policy change or virtual-environment activation is neede
 Open the Next.js address printed in the terminal (usually port 3000). Select
 **I manage the mess**, then **Reports & activity** or **View model evaluation**.
 
-You should see **ML model active**, **Random Forest v2**, tomorrow's predicted
+You should see **ML model active**, **XGBoost v2**, tomorrow's predicted
 meals, preparation quantities, and model-versus-baseline errors for all three
 meals. The demo uses 84 completed days of **synthetic** data with a weekly pattern.
 Its results demonstrate the integration; they are not evidence of real-campus
@@ -61,7 +61,7 @@ running or displays a labelled fallback if not.
 3. For each meal, Python builds features for weekday, weekend, previous-day count,
    the same day last week, seven-day average, fourteen-day average, and weekly trend.
 4. At least **42 consecutive completed days per meal** are needed to evaluate a
-   Random Forest. Fewer than seven records stay on the app's local average.
+   XGBoost. Fewer than seven records stay on the app's local average.
 5. Python trains on earlier observations and evaluates on the last 7–14 target
    days. Both the forest and baseline use the same forecast horizon and available
    information. Unobserved intervening days are predicted recursively.
@@ -123,7 +123,7 @@ the included on-demand training is intended for a small pilot.
 | Python 3.12 not found            | Install Python 3.12 with the launcher, reopen Terminal, and rerun `ml:setup`.                      |
 | ML not connected                 | Run `ml:setup`; for a hosted service, configure both ML environment variables and restart Next.js. |
 | ML unavailable · fallback active | Start Python with `dev:ml`, or check its URL, matching API key, service logs, and reachability.    |
-| More history needed              | Gather completed records; Random Forest needs 42 consecutive days per meal.                        |
+| More history needed              | Gather completed records; XGBoost needs 42 consecutive days per meal.                        |
 | Baseline performed better        | Training ran successfully, but the average had equal or lower validation error.                    |
 | History has missing days         | Resolve missing service records; do not fabricate zero counts.                                     |
 | Port already in use              | Stop the earlier local service before starting `dev:ml`.                                           |

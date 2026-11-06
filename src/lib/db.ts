@@ -2,15 +2,18 @@ import { Pool, type PoolClient, type QueryResultRow } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 
 let pool: Pool | undefined;
+export function getDatabaseUrl() {
+  const url = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+  if (!url)
+    throw new Error(
+      "DATABASE_URL or POSTGRES_URL is required in live mode",
+    );
+  return url;
+}
 export function getPool() {
-  if (!process.env.DATABASE_URL)
-    throw new Error("DATABASE_URL is required in live mode");
-  const max = process.env.DATABASE_POOL_SIZE
-    ? parseInt(process.env.DATABASE_POOL_SIZE, 10)
-    : 10;
   pool ??= new Pool({
-    connectionString: process.env.DATABASE_URL,
-    max,
+    connectionString: getDatabaseUrl(),
+    max: 3,
     connectionTimeoutMillis: 5000,
     idleTimeoutMillis: 10000,
     allowExitOnIdle: true,

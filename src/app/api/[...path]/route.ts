@@ -12,25 +12,17 @@ import { ApiError } from "@/lib/errors";
 import * as service from "@/lib/service";
 import {
   addonSchema,
-  bulkImportSchema,
-  cancelLeaveSchema,
-  createStudentSchema,
   ledgerSchema,
   loginSchema,
-  manualLeaveSchema,
   mealSchema,
-  paginationSchema,
-  resetPinSchema,
-  reviewLeaveSchema,
   scanSchema,
   settingsSchema,
-  studentLeaveRequestSchema,
-  updateStatusSchema,
   usageSchema,
 } from "@/lib/validation";
 import { localTime, reportCsv } from "@/lib/domain";
 import { demoHistory } from "@/lib/demo-history";
 import { demandForecasts } from "@/lib/forecast";
+import { generateMessInsights, insightInputSchema } from "@/lib/genai";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 export const dynamic = "force-dynamic";
@@ -44,6 +36,29 @@ async function readBody(request: NextRequest) {
   if (raw.length > 65536) throw new ApiError(413, "Request is too large.");
   return raw;
 }
+const demoAiRateLimit = new Map<string, { count: number; windowStart: number }>();
+function checkDemoAiRateLimit(request: NextRequest) {
+  const ip =
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip") ||
+    "client";
+  const now = Date.now();
+  const windowMs = 5 * 60 * 1000;
+  const maxRequests = 5;
+  const record = demoAiRateLimit.get(ip);
+  if (!record || now - record.windowStart > windowMs) {
+    demoAiRateLimit.set(ip, { count: 1, windowStart: now });
+  } else {
+    if (record.count >= maxRequests) {
+      throw new ApiError(
+        429,
+        "Too many AI insight requests in demo mode. Please wait a few minutes before trying again.",
+        "RATE_LIMITED",
+      );
+    }
+    record.count++;
+  }
+}
 async function handler(request: NextRequest) {
   try {
     const path = new URL(request.url).pathname.replace(/^\/api/, "");
@@ -54,8 +69,13 @@ async function handler(request: NextRequest) {
           ? { status: "ok", mode: "demo" }
           : { ...(await service.databaseHealth()), mode: "live" },
       );
-    // Public only in demo mode. The server supplies fixed synthetic history;
-    // callers cannot submit student records, arbitrary training data, or a URL.
+    // Public only in demo mode with strict validation, rate limiting, and origin check.
+    if (appMode() === "demo" && path === "/demo/ai-insights" && method === "POST") {
+      checkOrigin(request);
+      checkDemoAiRateLimit(request);
+      const input = insightInputSchema.parse(JSON.parse(await readBody(request)));
+      return json(await generateMessInsights(input));
+    }
     if (
       appMode() === "demo" &&
       path === "/demo/forecasts" &&
@@ -131,95 +151,13 @@ async function handler(request: NextRequest) {
         await service.orderAddon(user, addonSchema.parse(await body())),
       );
     }
-    if (path === "/student/leaves" && method === "POST") {
-      requireRole(user, "student");
-      return json(
-        await service.requestLeave(
-          user,
-          studentLeaveRequestSchema.parse(await body()),
-        ),
-        201,
-      );
-    }
-    if (path === "/student/leaves/cancel" && method === "POST") {
-      requireRole(user, "student");
-      return json(
-        await service.cancelLeave(
-          user,
-          cancelLeaveSchema.parse(await body()),
-        ),
-      );
-    }
     requireRole(user, "manager");
-    if (path === "/manager/overview" && method === "GET") {
-      const forecastSource = request.nextUrl.searchParams.get("forecastSource");
-      return json(await service.managerOverview(user, forecastSource));
+    if (path === "/manager/ai-insights" && method === "POST") {
+      const input = insightInputSchema.parse(await body());
+      return json(await generateMessInsights(input));
     }
-    if (path === "/manager/students" && method === "GET") {
-      const params = paginationSchema.parse({
-        page: request.nextUrl.searchParams.get("page") ?? 1,
-        limit: request.nextUrl.searchParams.get("limit") ?? 25,
-        search: request.nextUrl.searchParams.get("search") ?? "",
-      });
-      return json(
-        await service.paginatedStudents(
-          user,
-          params.page,
-          params.limit,
-          params.search,
-        ),
-      );
-    }
-    if (path === "/manager/students" && method === "POST") {
-      return json(
-        await service.createStudent(
-          user,
-          createStudentSchema.parse(await body()),
-        ),
-        201,
-      );
-    }
-    if (path === "/manager/students/reset-pin" && method === "POST") {
-      return json(
-        await service.resetStudentPin(
-          user,
-          resetPinSchema.parse(await body()),
-        ),
-      );
-    }
-    if (path === "/manager/students/status" && method === "PATCH") {
-      return json(
-        await service.updateStudentStatus(
-          user,
-          updateStatusSchema.parse(await body()),
-        ),
-      );
-    }
-    if (path === "/manager/students/import" && method === "POST") {
-      return json(
-        await service.bulkImportStudents(
-          user,
-          bulkImportSchema.parse(await body()),
-        ),
-      );
-    }
-    if (path === "/manager/leaves/review" && method === "PATCH") {
-      return json(
-        await service.reviewLeave(
-          user,
-          reviewLeaveSchema.parse(await body()),
-        ),
-      );
-    }
-    if (path === "/manager/leaves/manual" && method === "POST") {
-      return json(
-        await service.manualLeave(
-          user,
-          manualLeaveSchema.parse(await body()),
-        ),
-        201,
-      );
-    }
+    if (path === "/manager/overview" && method === "GET")
+      return json(await service.managerOverview(user));
     if (path === "/manager/qr" && method === "GET")
       return json(
         await service.issueQr(
@@ -240,8 +178,7 @@ async function handler(request: NextRequest) {
         await service.adjustLedger(user, ledgerSchema.parse(await body())),
       );
     if (path === "/reports/daily" && method === "GET") {
-      const forecastSource = request.nextUrl.searchParams.get("forecastSource");
-      const data = await service.managerOverview(user, forecastSource);
+      const data = await service.managerOverview(user);
       return new NextResponse(reportCsv(data.history), {
         headers: {
           "content-type": "text/csv; charset=utf-8",

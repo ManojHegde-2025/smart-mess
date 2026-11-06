@@ -28,7 +28,7 @@ export function Counter() {
         width: 360,
         margin: 2,
         errorCorrectionLevel: "M",
-        color: { dark: "#1a1a1e", light: "#e8e6e3" },
+        color: { dark: "#143e32", light: "#ffffff" },
       });
       if (request !== generation.current) return;
       setToken(result);

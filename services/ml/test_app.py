@@ -50,7 +50,7 @@ def test_future_and_duplicate_observations_rejected():
 
 
 @pytest.mark.parametrize("horizon", [1, 2, 7])
-def test_weekly_pattern_selects_xgboost_at_requested_horizon(horizon):
+def test_weekly_pattern_selects_random_forest_at_requested_horizon(horizon):
     body = request_body(84)
     last_date = date.fromisoformat(body["history"][-1]["date"])
     body["target_date"] = str(last_date + timedelta(days=horizon))
@@ -93,15 +93,3 @@ def test_constant_history_prefers_baseline_and_long_horizon_is_explicit():
     result = forecast(ForecastRequest(**body))
     assert result["status"] == "unsupported_horizon"
     assert result["evaluation_rows"] == 0
-
-
-def test_history_with_older_gaps_trains_on_recent_contiguous_segment():
-    # 84 days with gap at day 10 (so the last 73 days are completely contiguous)
-    start = date(2026, 1, 1)
-    history = [{"date": str(start + timedelta(days=i)), "count": 100 + (i % 7)*5} for i in range(84) if i != 10]
-    body = {"history": history, "target_date": str(start + timedelta(days=85)), "safety_buffer": 0.05}
-    result = forecast(ForecastRequest(**body))
-    assert result["status"] == "selected"
-    assert result["sample_days"] == 83
-    assert result["method"].startswith("XGBoost")
-

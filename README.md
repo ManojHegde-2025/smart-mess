@@ -24,7 +24,7 @@ database and configuration described below.
 - Live meal counts, preparation entry, daily CSV exports, review events, policy
   settings, and a manager audit trail.
 - Aggregate rolling-demand estimates, historical MAE, and a configurable
-  preparation buffer. The connected FastAPI service compares a Random Forest with
+  preparation buffer. The connected FastAPI service compares an XGBoost with
   a chronological baseline at the same forecast horizon and uses the model only
   when it improves holdout MAE. Demo and live dashboards show model status and
   evaluation scores. See [ML_SETUP.md](ML_SETUP.md).
@@ -66,15 +66,30 @@ connected to a Vercel account by the author of the files.
 
 ### Database
 
-Create a PostgreSQL database using Neon, Supabase, or another PostgreSQL provider.
-For Vercel, use the provider's **pooled server connection URL**. Use verified TLS
-as required by that provider; do not set `rejectUnauthorized: false`.
+Create a PostgreSQL database using Neon, Supabase, Prisma Postgres, or another
+PostgreSQL provider. For Vercel, use the provider's **pooled server connection URL**
+when available. Use verified TLS as required by that provider; do not set
+`rejectUnauthorized: false`.
 
-Put `DATABASE_URL` in your local `.env.local` and run:
+Put the rotated, private connection URL in `DATABASE_URL` in your local
+`.env.local`, then run:
 
 ```bash
 npm run db:migrate
 ```
+
+In PowerShell, use:
+
+```powershell
+npm.cmd run db:migrate
+```
+
+Vercel Postgres integrations commonly expose `POSTGRES_URL`. Live mode uses
+`DATABASE_URL` when set and otherwise falls back to `POSTGRES_URL`, so either
+works in Vercel. `PRISMA_DATABASE_URL` is not read directly: despite its name,
+the value may be a PostgreSQL connection string, but this app uses Drizzle and
+the `pg` driver, not Prisma. If that is the only variable your provider gives
+you, add the same value in Vercel as `DATABASE_URL`.
 
 The migration runner is transactional, locked against concurrent migration runs,
 and checks previously applied migration hashes. Re-running it is safe. Never edit
@@ -94,7 +109,9 @@ QR_SECRET. For example, run this command separately for each value on your machi
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-Add these environment variables to Vercel's Production environment:
+Add these environment variables to Vercel's Production environment. If your
+database integration already supplies `POSTGRES_URL`, you can omit `DATABASE_URL`
+or set `DATABASE_URL` to the same pooled connection URL:
 
 | Variable         | Value                                                                     |
 | ---------------- | ------------------------------------------------------------------------- |
@@ -133,6 +150,19 @@ export USER_PIN
 npm run user:create -- --college-id STUDENT001 --reset-pin
 unset USER_PIN
 ```
+
+On Windows PowerShell, use a hidden PIN prompt instead:
+
+```powershell
+$pin = Read-Host "New 6-12 digit PIN" -AsSecureString
+$env:USER_PIN = [System.Net.NetworkCredential]::new("", $pin).Password
+npm.cmd run user:create -- --college-id MANAGER001 --name "Mess Manager" --role manager
+Remove-Item Env:USER_PIN
+$pin.Dispose()
+```
+
+Replace the account details as needed. Run the command from the project root
+after the database migration, with the rotated database URL in `.env.local`.
 
 Resetting a PIN revokes all previous sessions for that account. Account creation
 does not grant an opening balance. The manager records confirmed payments or
@@ -202,7 +232,7 @@ services. Open the manager dashboard and choose **View model evaluation**.
 
 The shared integration works in both demo and live mode. Demo training uses 84
 synthetic completed days; live mode uses aggregate PostgreSQL meal counts. Python
-trains a separate Random Forest for each meal, compares it with a rolling average
+trains a separate XGBoost for each meal, compares it with a rolling average
 on chronological holdout targets at the same horizon, and selects the lower-error
 method. Tomorrow's forecast now works with data through yesterday. Training needs
 42 consecutive days; cold starts, gaps, and service outages are labelled honestly.
@@ -267,7 +297,7 @@ src/lib/                 Validation, auth, database transactions, demo and forec
 db/                      Versioned PostgreSQL migration
 scripts/                 Migrations, account/PIN administration, and ML startup
 tests/                   Domain/security, PostgreSQL, browser, and ML integration tests
-services/ml/             Integrated FastAPI Random Forest service and tests
+services/ml/             Integrated FastAPI XGBoost service and tests
 .github/workflows/       CI checks
 ```
 
@@ -293,3 +323,22 @@ Do not publish actual student data, PINs, database URLs, or secret values to Git
 The demo is openly accessible by design and must remain clearly identified as
 synthetic. Before campus rollout, confirm policies, access, backups, privacy,
 monitoring, and institution-specific acceptance testing.
+
+## Generative AI intelligence layer
+
+Smart Mess now includes a real Generative AI decision-support layer alongside the XGBoost demand forecasting model.
+
+- **XGBoost:** produces the numerical aggregate meal-demand forecast.
+- **Generative AI (Gemini):** explains the forecast, analyzes prepared-versus-served waste patterns, identifies important alerts, and generates manager-facing preparation recommendations.
+- The AI receives structured operational data only; it is instructed not to invent measurements.
+
+### Enable AI insights
+
+Set these server-side environment variables before running the app:
+
+```env
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=gemini-2.5-flash
+```
+
+Do not expose the API key in client-side code or commit it to Git. In the Manager dashboard, use **Generate AI insights** to call the server-side GenAI endpoint.

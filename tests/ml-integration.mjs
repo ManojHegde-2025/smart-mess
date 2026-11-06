@@ -51,8 +51,8 @@ function launch(command, args, cwd) {
   children.push(child);
   return child;
 }
-async function ready(url, child) {
-  for (let i = 0; i < 80; i++) {
+async function ready(url, child, attempts = 80) {
+  for (let i = 0; i < attempts; i++) {
     if (child.exitCode !== null || child.signalCode !== null)
       throw new Error(`Service exited: ${child.output()}`);
     try {
@@ -75,7 +75,7 @@ try {
     ["-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", mlPort],
     join(root, "services", "ml"),
   );
-  await ready(`${mlUrl}/health`, ml);
+  await ready(`${mlUrl}/health`, ml, 240);
   const web = launch(
     process.execPath,
     [

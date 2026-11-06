@@ -9,19 +9,9 @@ import {
   isDate,
   localTime,
 } from "../src/lib/domain";
-import {
-  bulkImportSchema,
-  cancelLeaveSchema,
-  createStudentSchema,
-  manualLeaveSchema,
-  paginationSchema,
-  resetPinSchema,
-  reviewLeaveSchema,
-  settingsSchema,
-  studentLeaveRequestSchema,
-  updateStatusSchema,
-} from "../src/lib/validation";
+import { settingsSchema } from "../src/lib/validation";
 import { hashPin, verifyPin } from "../src/lib/auth";
+import { getDatabaseUrl } from "../src/lib/db";
 
 test("service dates use the configured time zone and handle day rollover", () => {
   assert.deepEqual(
@@ -38,6 +28,22 @@ test("meal windows include opening and exclude closing time", () => {
   assert.equal(inMealWindow("12:00", window), true);
   assert.equal(inMealWindow("14:29", window), true);
   assert.equal(inMealWindow("14:30", window), false);
+});
+test("database connection accepts Vercel's POSTGRES_URL alias", () => {
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  const previousPostgresUrl = process.env.POSTGRES_URL;
+  try {
+    delete process.env.DATABASE_URL;
+    process.env.POSTGRES_URL = "postgres://example";
+    assert.equal(getDatabaseUrl(), "postgres://example");
+    process.env.DATABASE_URL = "postgres://preferred";
+    assert.equal(getDatabaseUrl(), "postgres://preferred");
+  } finally {
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
+    if (previousPostgresUrl === undefined) delete process.env.POSTGRES_URL;
+    else process.env.POSTGRES_URL = previousPostgresUrl;
+  }
 });
 test("forecast cannot read future observations and reports cold start honestly", () => {
   const rows = Array.from({ length: 8 }, (_, i) => ({
@@ -98,166 +104,56 @@ test("PINs are salted and only the correct PIN verifies", async () => {
   assert.equal(await verifyPin("847292", a), false);
   assert.equal(await verifyPin("847291", "not-a-hash"), false);
 });
-test("DATABASE_POOL_SIZE defaults to 10 and parses environment override", () => {
-  const parsePool = (val: string | undefined) => (val ? parseInt(val, 10) : 10);
-  assert.equal(parsePool(undefined), 10);
-  assert.equal(parsePool("25"), 25);
-  assert.equal(parsePool("3"), 3);
-});
-
-test("createStudentSchema validates college ID, name, and 6-12 digit PIN", () => {
-  assert.equal(
-    createStudentSchema.safeParse({
-      collegeId: "SM2026101",
-      name: "Aarav Sharma",
-      pin: "123456",
-    }).success,
-    true,
+test("Gemini insight input schema validates structured payload and rejects malformed data", async () => {
+  const { insightInputSchema, generateMessInsights } = await import(
+    "../src/lib/genai"
   );
-  // Rejects pin with < 6 digits
-  assert.equal(
-    createStudentSchema.safeParse({
-      collegeId: "SM2026101",
-      name: "Aarav Sharma",
-      pin: "12345",
-    }).success,
-    false,
-  );
-  // Rejects pin with non-digits
-  assert.equal(
-    createStudentSchema.safeParse({
-      collegeId: "SM2026101",
-      name: "Aarav Sharma",
-      pin: "12345a",
-    }).success,
-    false,
-  );
-  // Rejects invalid college ID characters
-  assert.equal(
-    createStudentSchema.safeParse({
-      collegeId: "SM 2026",
-      name: "Aarav Sharma",
-      pin: "123456",
-    }).success,
-    false,
-  );
-});
-
-test("resetPinSchema and updateStatusSchema enforce types and constraints", () => {
-  const uuid = "10000000-0000-4000-8000-000000000001";
-  assert.equal(
-    resetPinSchema.safeParse({ userId: uuid, pin: "987654" }).success,
-    true,
-  );
-  assert.equal(
-    resetPinSchema.safeParse({ userId: "not-a-uuid", pin: "987654" }).success,
-    false,
-  );
-  assert.equal(
-    updateStatusSchema.safeParse({ userId: uuid, active: false }).success,
-    true,
-  );
-  assert.equal(
-    updateStatusSchema.safeParse({ userId: uuid, active: "false" }).success,
-    false,
-  );
-});
-
-test("bulkImportSchema validates batch and bounds", () => {
-  assert.equal(
-    bulkImportSchema.safeParse({
-      students: [
-        { collegeId: "SM2026001", name: "Student 1" },
-        { collegeId: "SM2026002", name: "Student 2", messId: "south-mess" },
-      ],
-      defaultPin: "654321",
-    }).success,
-    true,
-  );
-  // Empty student array is rejected
-  assert.equal(
-    bulkImportSchema.safeParse({
-      students: [],
-    }).success,
-    false,
-  );
-});
-
-test("studentLeaveRequestSchema enforces date order and valid dates", () => {
-  assert.equal(
-    studentLeaveRequestSchema.safeParse({
-      startsOn: "2026-11-01",
-      endsOn: "2026-11-05",
-      reason: "Visiting family",
-    }).success,
-    true,
-  );
-  // Rejects endsOn before startsOn
-  assert.equal(
-    studentLeaveRequestSchema.safeParse({
-      startsOn: "2026-11-05",
-      endsOn: "2026-11-01",
-    }).success,
-    false,
-  );
+  const valid = {
+    messName: "South Mess",
+    date: "2026-11-06",
+    forecasts: [
+      {
+        meal: "breakfast",
+        predicted: 120,
+        prepare: 130,
+        method: "XGBoost v2",
+        mae: 2.5,
+      },
+    ],
+    counts: { breakfast: 118 },
+    prepared: { breakfast: 130 },
+    leaveCount: 4,
+    exceptionCount: 0,
+    recentUsage: [
+      {
+        date: "2026-11-05",
+        meal: "breakfast",
+        prepared: 130,
+        served: 118,
+      },
+    ],
+  };
+  assert.equal(insightInputSchema.safeParse(valid).success, true);
   // Rejects invalid date format
   assert.equal(
-    studentLeaveRequestSchema.safeParse({
-      startsOn: "not-a-date",
-      endsOn: "2026-11-05",
-    }).success,
+    insightInputSchema.safeParse({ ...valid, date: "not-a-date" }).success,
     false,
   );
-});
-
-test("reviewLeaveSchema and cancelLeaveSchema enforce status enum and UUIDs", () => {
-  const uuid = "10000000-0000-4000-8000-000000000001";
+  // Rejects negative counts
   assert.equal(
-    reviewLeaveSchema.safeParse({ leaveId: uuid, status: "approved" }).success,
-    true,
-  );
-  assert.equal(
-    reviewLeaveSchema.safeParse({ leaveId: uuid, status: "pending" }).success,
+    insightInputSchema.safeParse({ ...valid, counts: { breakfast: -5 } })
+      .success,
     false,
   );
-  assert.equal(cancelLeaveSchema.safeParse({ leaveId: uuid }).success, true);
-  assert.equal(cancelLeaveSchema.safeParse({ leaveId: "invalid" }).success, false);
-});
-
-test("manualLeaveSchema enforces student UUID, dates, and reason", () => {
-  const uuid = "10000000-0000-4000-8000-000000000001";
-  assert.equal(
-    manualLeaveSchema.safeParse({
-      userId: uuid,
-      startsOn: "2026-11-10",
-      endsOn: "2026-11-12",
-      reason: "Sanctioned official hostel leave",
-    }).success,
-    true,
-  );
-  assert.equal(
-    manualLeaveSchema.safeParse({
-      userId: uuid,
-      startsOn: "2026-11-12",
-      endsOn: "2026-11-10",
-      reason: "Sanctioned",
-    }).success,
-    false,
-  );
-});
-
-test("paginationSchema applies defaults and clamp boundaries", () => {
-  const parsedDefault = paginationSchema.parse({});
-  assert.equal(parsedDefault.page, 1);
-  assert.equal(parsedDefault.limit, 25);
-  assert.equal(parsedDefault.search, "");
-
-  const parsedCustom = paginationSchema.parse({
-    page: "3",
-    limit: "50",
-    search: "  Aarav  ",
-  });
-  assert.equal(parsedCustom.page, 3);
-  assert.equal(parsedCustom.limit, 50);
-  assert.equal(parsedCustom.search, "Aarav");
+  // Without GEMINI_API_KEY, throws clear 503 ApiError
+  const prevKey = process.env.GEMINI_API_KEY;
+  try {
+    delete process.env.GEMINI_API_KEY;
+    await assert.rejects(
+      async () => generateMessInsights(valid),
+      (err: any) => err.status === 503 && err.code === "SERVICE_UNAVAILABLE",
+    );
+  } finally {
+    if (prevKey !== undefined) process.env.GEMINI_API_KEY = prevKey;
+  }
 });
