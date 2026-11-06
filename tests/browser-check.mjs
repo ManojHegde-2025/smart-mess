@@ -164,7 +164,16 @@ try {
     "PASS: manager navigation, policy save, QR image decoding, duplicate rejection, add-on, camera startup cancellation, and mobile layouts.",
   );
 } catch (error) {
-  console.error(error);
+  console.error("BROWSER_CHECK_ERROR:", error);
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    try {
+      const { appendFileSync } = await import("node:fs");
+      appendFileSync(
+        process.env.GITHUB_STEP_SUMMARY,
+        `### Browser Check Failure\n\`\`\`\n${error?.stack || error}\n\`\`\`\n#### Server Logs\n\`\`\`\n${serverLogs}\n\`\`\`\n`,
+      );
+    } catch {}
+  }
   process.exitCode = 1;
 } finally {
   if (browser) await browser.close();
