@@ -1,4 +1,4 @@
-# Smart Mess 🍽️
+# Smart Mess 
 
 ### Smart Hostel Mess Management & Meal Intelligence Platform
 
