@@ -190,6 +190,19 @@ export async function demoRequest<T>(
     save(s);
     return { ok: true } as T;
   }
+  if (!s.user) {
+    if (path.startsWith("/manager") || path === "/reports/daily") {
+      s.user = s.users.find((u) => u.id === managerId) ?? null;
+      if (s.user) save(s);
+    } else if (
+      path.startsWith("/student") ||
+      path === "/meals/scan" ||
+      path === "/addons"
+    ) {
+      s.user = s.users.find((u) => u.id === studentId) ?? null;
+      if (s.user) save(s);
+    }
+  }
   if (!s.user) throw new Error("Please sign in.");
   if (path === "/student/overview") {
     const data: StudentOverview = {
