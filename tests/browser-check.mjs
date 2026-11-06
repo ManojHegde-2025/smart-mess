@@ -54,6 +54,8 @@ try {
     headless: true,
     args: [
       "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
       "--use-fake-device-for-media-stream",
       "--use-fake-ui-for-media-stream",
     ],
@@ -165,6 +167,8 @@ try {
   );
 } catch (error) {
   console.error("BROWSER_CHECK_ERROR:", error);
+  const msg = `${error?.stack || error}\nServer logs:\n${serverLogs}`;
+  console.log(`::error title=BrowserCheckFailure::${msg.replace(/\r?\n/g, "%0A")}`);
   if (process.env.GITHUB_STEP_SUMMARY) {
     try {
       const { appendFileSync } = await import("node:fs");
