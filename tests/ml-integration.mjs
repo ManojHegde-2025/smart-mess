@@ -147,7 +147,7 @@ try {
   await page
     .getByRole("heading", { name: "Learn from completed meal counts" })
     .waitFor();
-  assert.equal(await page.getByText("Random Forest MAE").count(), 3);
+  assert.equal(await page.getByText("XGBoost MAE").count(), 3);
   assert.equal(
     await page.getByText("ML model active", { exact: true }).count(),
     3,
@@ -213,7 +213,7 @@ try {
         meal: f.meal,
         predicted: f.predicted,
         prepare: f.prepare,
-        randomForestMae: f.candidateMae,
+        xgboostMae: f.candidateMae,
         baselineMae: f.baselineMae,
         evaluationDays: f.evaluationDays,
       })),

@@ -24,7 +24,7 @@ def test_chronological_evaluation_and_model_selection():
     result = forecast(ForecastRequest(**request_body()))
     assert result["evaluation_rows"] >= 7
     assert result["prepare"] >= result["predicted"] >= 0
-    if result["method"].startswith("Random Forest"):
+    if result["method"].startswith("XGBoost"):
         assert result["candidate_mae"] < result["baseline_mae"]
     else:
         assert result["candidate_mae"] >= result["baseline_mae"]
@@ -50,7 +50,7 @@ def test_future_and_duplicate_observations_rejected():
 
 
 @pytest.mark.parametrize("horizon", [1, 2, 7])
-def test_weekly_pattern_selects_random_forest_at_requested_horizon(horizon):
+def test_weekly_pattern_selects_xgboost_at_requested_horizon(horizon):
     body = request_body(84)
     last_date = date.fromisoformat(body["history"][-1]["date"])
     body["target_date"] = str(last_date + timedelta(days=horizon))
@@ -103,5 +103,5 @@ def test_history_with_older_gaps_trains_on_recent_contiguous_segment():
     result = forecast(ForecastRequest(**body))
     assert result["status"] == "selected"
     assert result["sample_days"] == 83
-    assert result["method"].startswith("Random Forest")
+    assert result["method"].startswith("XGBoost")
 

@@ -75,7 +75,7 @@ export async function demandForecasts(
         return {
           ...baseline,
           mlStatus: "insufficient_history",
-          note: "Collect at least seven completed days to call the prediction service; Random Forest requires 42 consecutive days.",
+          note: "Collect at least seven completed days to call the prediction service; XGBoost requires 42 consecutive days.",
         };
       const body = JSON.stringify({
         history: rows,

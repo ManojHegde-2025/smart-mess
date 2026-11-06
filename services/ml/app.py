@@ -7,7 +7,7 @@ import os
 import numpy as np
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field, model_validator
-from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
 
 app = FastAPI(title="Smart Mess demand prediction", version="2.0.0")
 MIN_ML_DAYS = 42
@@ -70,7 +70,7 @@ def forecast(request: ForecastRequest) -> dict:
                  if contiguous and supported else float(np.mean(values[-7:])))
     method = "7-day rolling baseline"
     status = "insufficient_history"
-    reason = f"Random Forest needs at least {MIN_ML_DAYS} consecutive completed days per meal."
+    reason = f"XGBoost needs at least {MIN_ML_DAYS} consecutive completed days per meal."
     candidate_mae = baseline_mae = None
     evaluation_rows = 0
 
@@ -87,8 +87,16 @@ def forecast(request: ForecastRequest) -> dict:
         train_end = first_target - horizon + 1
         x = [features(train_rows[i].date, train_values[:i]) for i in range(14, len(train_rows))]
         y = train_values[14:]
-        model = RandomForestRegressor(n_estimators=96, max_depth=8,
-                                      min_samples_leaf=2, random_state=42, n_jobs=1)
+        model = XGBRegressor(
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            objective="reg:squarederror",
+            random_state=42,
+            n_jobs=1,
+        )
         model.fit(x[:train_end - 14], y[:train_end - 14])
         candidate_errors, baseline_errors = [], []
         for i in range(first_target, len(train_rows)):
@@ -102,12 +110,12 @@ def forecast(request: ForecastRequest) -> dict:
         if candidate_mae < baseline_mae:
             model.fit(x, y)
             predicted = project(model, train_values, train_rows[-1].date, horizon)
-            method = "Random Forest v2"
+            method = "XGBoost Regressor"
             status = "selected"
-            reason = "Random Forest improved on the rolling baseline at the same forecast horizon."
+            reason = "XGBoost improved on the rolling baseline at the same forecast horizon."
         else:
             status = "baseline_preferred"
-            reason = "The trained Random Forest did not beat the baseline on held-out days; the baseline was retained."
+            reason = "The trained XGBoost did not beat the baseline on held-out days; the baseline was retained."
 
     spread = float(np.std(values[-7:]))
     count = max(0, round(predicted))
@@ -120,7 +128,7 @@ def forecast(request: ForecastRequest) -> dict:
         "candidate_mae": round(candidate_mae, 2) if candidate_mae is not None else None,
         "evaluation_rows": evaluation_rows, "sample_days": len(rows), "horizon_days": horizon,
         "history_through": str(rows[-1].date), "status": status, "reason": reason,
-        "model_version": "rf-v2" if status == "selected" else "rolling-v2",
+        "model_version": "xgboost-v1" if status == "selected" else "rolling-v2",
         "features": FEATURES, "minimum_ml_days": MIN_ML_DAYS,
         "range_note": "Recent observed variation; not a calibrated confidence interval.",
         "evaluation_note": "Chronological holdout at the requested horizon; unobserved intervening days are predicted recursively. Lower MAE is better; historical results do not guarantee future accuracy.",

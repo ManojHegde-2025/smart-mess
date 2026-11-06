@@ -84,7 +84,7 @@ def main():
         print(f"  Model Note:        {res['reason']}")
 
     print("\n" + "=" * 70)
-    print("All forecasts generated via real Random Forest training on synthetic data.")
+    print("All forecasts generated via real XGBoost Regressor training on synthetic data.")
     print("=" * 70)
 
 

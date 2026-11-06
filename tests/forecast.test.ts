@@ -23,7 +23,7 @@ test("prediction boundary excludes partial/future data, authenticates, and share
         prepare: 41,
         lower: 30,
         upper: 45,
-        method: "Random Forest v2",
+        method: "XGBoost Regressor",
         mae: 1,
         baseline_mae: 8,
         candidate_mae: 1,
@@ -31,7 +31,7 @@ test("prediction boundary excludes partial/future data, authenticates, and share
         sample_days: body.history.length,
         horizon_days: 2,
         history_through: "2026-10-18",
-        model_version: "rf-v2",
+        model_version: "xgboost-v1",
         status: "selected",
         reason: "Model improved holdout error.",
       }),
@@ -108,7 +108,7 @@ test("invalid ML output, failed authentication, and missing configuration stay v
   let status = 200;
   const server = createServer((_req, res) => {
     res.writeHead(status, { "content-type": "application/json" });
-    res.end(JSON.stringify({ predicted: -9, method: "Random Forest" }));
+    res.end(JSON.stringify({ predicted: -9, method: "XGBoost Regressor" }));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {

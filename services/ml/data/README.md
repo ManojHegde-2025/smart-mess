@@ -90,7 +90,7 @@ python3 services/ml/data/generate_synthetic_data.py
 ## How to Run the Forecasting Pipeline Against It
 
 ### 1. Python ML Service Standalone Verification
-Run the verification script to confirm that the Random Forest model trains successfully on the 120-day dataset:
+Run the verification script to confirm that the XGBoost Regressor model trains successfully on the 120-day dataset:
 
 ```bash
 ./services/ml/.venv/bin/python services/ml/demo_forecast.py

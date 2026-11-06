@@ -69,7 +69,7 @@ def test_synthetic_dataset_schema_and_bounds(dataset_rows):
 
 
 @pytest.mark.parametrize("meal", ["breakfast", "lunch", "dinner"])
-def test_ml_pipeline_consumes_synthetic_dataset_and_selects_random_forest(dataset_rows, meal):
+def test_ml_pipeline_consumes_synthetic_dataset_and_selects_xgboost(dataset_rows, meal):
     history = [
         Observation(date=date.fromisoformat(r["date"]), count=int(r["served"]))
         for r in dataset_rows
@@ -83,8 +83,8 @@ def test_ml_pipeline_consumes_synthetic_dataset_and_selects_random_forest(datase
     req = ForecastRequest(history=history, target_date=target, safety_buffer=0.05)
     res = forecast(req)
 
-    assert res["status"] == "selected", f"Random Forest should beat baseline on synthetic weekly pattern: {res['reason']}"
-    assert res["method"] == "Random Forest v2"
+    assert res["status"] == "selected", f"XGBoost should beat baseline on synthetic weekly pattern: {res['reason']}"
+    assert res["method"] == "XGBoost Regressor"
     assert res["sample_days"] == 120
     assert res["evaluation_rows"] == 14
     assert res["candidate_mae"] < res["baseline_mae"]

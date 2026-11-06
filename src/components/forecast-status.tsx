@@ -46,7 +46,7 @@ export function ForecastStatus({
           {Boolean(f.evaluationDays) && (
             <div className="report-metrics">
               <span>
-                Random Forest MAE <b>{f.candidateMae ?? "—"}</b>
+                XGBoost MAE <b>{f.candidateMae ?? "—"}</b>
               </span>
               <span>
                 Baseline MAE <b>{f.baselineMae ?? "—"}</b>
